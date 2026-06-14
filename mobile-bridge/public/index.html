@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenCode Mobile Bridge</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .container {
+      max-width: 600px;
+      width: 100%;
+      padding: 40px 20px;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 32px;
+      font-size: 0.9rem;
+    }
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .toggle-label {
+      font-size: 1.1rem;
+      font-weight: 500;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 56px;
+      height: 30px;
+      cursor: pointer;
+    }
+    .toggle-switch input { display: none; }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: #333;
+      border-radius: 30px;
+      transition: background 0.3s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: #4caf50;
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(26px);
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    .status-on { background: #4caf50; box-shadow: 0 0 8px #4caf5080; }
+    .status-off { background: #666; }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      margin-bottom: 12px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: #999; font-size: 0.9rem; }
+    .info-value { color: #fff; font-size: 0.9rem; font-family: 'SF Mono', Consolas, monospace; }
+    .key-box {
+      background: #111;
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.85rem;
+      color: #4caf50;
+      word-break: break-all;
+      margin-top: 12px;
+      cursor: pointer;
+      position: relative;
+    }
+    .key-box:hover { border-color: #4caf50; }
+    .copy-hint {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.75rem;
+      color: #666;
+    }
+    .client-list { list-style: none; }
+    .client-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+    }
+    .client-item:last-child { border-bottom: none; }
+    .client-ip { font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; }
+    .client-time { color: #888; font-size: 0.8rem; }
+    .empty-state { color: #666; text-align: center; padding: 20px; font-size: 0.9rem; }
+    .error { color: #f44336; }
+    .refresh-btn {
+      background: none;
+      border: 1px solid #444;
+      color: #999;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      float: right;
+    }
+    .refresh-btn:hover { border-color: #4caf50; color: #4caf50; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>OpenCode Mobile Bridge</h1>
+    <p class="subtitle">Remote access control panel for your local OpenCode agent</p>
+
+    <div class="toggle-container">
+      <div>
+        <div style="display:flex;align-items:center;">
+          <span class="status-indicator" id="statusDot"></span>
+          <span class="toggle-label" id="statusText">Loading...</span>
+        </div>
+        <div style="color:#888;font-size:0.8rem;margin-top:4px;" id="statusSubtext"></div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="bridgeToggle" />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Connection Info</div>
+      <button class="refresh-btn" onclick="loadStatus()">Refresh</button>
+      <div class="info-row">
+        <span class="info-label">OpenCode URL</span>
+        <span class="info-value" id="ocUrl">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Connected Clients</span>
+        <span class="info-value" id="clientCount">0</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Max Connections</span>
+        <span class="info-value" id="maxConns">5</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">API Key</div>
+      <div style="color:#888;font-size:0.8rem;">Enter this key in your mobile app to authenticate</div>
+      <div class="key-box" id="apiKey" onclick="copyKey()">
+        Loading...
+        <span class="copy-hint">Click to copy</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Connected Devices</div>
+      <ul class="client-list" id="clientList">
+        <li class="empty-state">No devices connected</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    let apiKey = '';
+
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/bridge/status', {
+          headers: { 'Authorization': 'Bearer ' + apiKey }
+        });
+        if (res.status === 401) {
+          apiKey = prompt('Enter your API key:');
+          if (apiKey) localStorage.setItem('bridgeApiKey', apiKey);
+          return loadStatus();
+        }
+        const data = await res.json();
+        updateUI(data);
+      } catch (e) {
+        document.getElementById('statusText').textContent = 'Connection Error';
+        document.getElementById('statusDot').className = 'status-indicator status-off';
+      }
+    }
+
+    function updateUI(data) {
+      const toggle = document.getElementById('bridgeToggle');
+      toggle.checked = data.bridgeEnabled;
+      toggle.onchange = () => toggleBridge(toggle.checked);
+
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      const sub = document.getElementById('statusSubtext');
+
+      if (data.bridgeEnabled) {
+        dot.className = 'status-indicator status-on';
+        text.textContent = 'Bridge Active';
+        sub.textContent = 'Mobile devices can connect';
+      } else {
+        dot.className = 'status-indicator status-off';
+        text.textContent = 'Bridge Disabled';
+        sub.textContent = 'Mobile connections will be rejected';
+      }
+
+      document.getElementById('ocUrl').textContent = data.opencodeUrl;
+      document.getElementById('clientCount').textContent = data.connectedClients;
+      document.getElementById('maxConns').textContent = '5';
+      document.getElementById('apiKey').innerHTML = (data.apiKey || apiKey) + '<span class="copy-hint">Click to copy</span>';
+
+      const list = document.getElementById('clientList');
+      if (data.clients && data.clients.length > 0) {
+        list.innerHTML = data.clients.map(c =>
+          '<li class="client-item"><span class="client-ip">' + c.ip + '</span><span class="client-time">' + new Date(c.connectedAt).toLocaleTimeString() + '</span></li>'
+        ).join('');
+      } else {
+        list.innerHTML = '<li class="empty-state">No devices connected</li>';
+      }
+    }
+
+    async function toggleBridge(enabled) {
+      try {
+        const res = await fetch('/api/bridge/toggle', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        loadStatus();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function copyKey() {
+      const el = document.getElementById('apiKey');
+      const text = el.textContent.replace('Click to copy', '').trim();
+      navigator.clipboard.writeText(text);
+      el.innerHTML = text + '<span class="copy-hint" style="color:#4caf50">Copied!</span>';
+      setTimeout(() => {
+        el.innerHTML = text + '<span class="copy-hint">Click to copy</span>';
+      }, 2000);
+    }
+
+    apiKey = localStorage.getItem('bridgeApiKey') || '';
+    loadStatus();
+    setInterval(loadStatus, 5000);
+  </script>
+</body>
+</html>

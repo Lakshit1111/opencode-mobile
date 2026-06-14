@@ -18,6 +18,12 @@
         "backgroundColor": "#0a0a0a"
       },
       "package": "com.opencode.mobile"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "5c6f8072-bdeb-4a8f-8171-8607a7a4599f"
+      }
+    },
+    "owner": "lakshit1"
   }
 }

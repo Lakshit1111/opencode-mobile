@@ -58,11 +58,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setConnection: async (config: ConnectionConfig) => {
     client.configure(config);
     const health = await client.checkHealth();
-    if (!health.healthy && !health.version) {
-      throw new Error("Cannot connect to OpenCode server");
+    if (!health.healthy) {
+      throw new Error("Cannot connect to OpenCode server. Make sure the bridge is running and OpenCode is started with 'opencode serve --port 8765'.");
     }
     await saveConnection(config);
-    set({ connection: config, connected: true });
+    set({ connection: config, connected: true, bridgeEnabled: health.bridgeEnabled ?? true });
     get().startEventStream();
     get().fetchSessions();
   },
@@ -90,8 +90,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (config) {
       client.configure(config);
       const health = await client.checkHealth();
-      if (health.healthy || health.version) {
-        set({ connection: config, connected: true });
+      if (health.healthy) {
+        set({ connection: config, connected: true, bridgeEnabled: health.bridgeEnabled ?? true });
         get().startEventStream();
         get().fetchSessions();
         return config;

@@ -53,14 +53,19 @@ class OpenCodeClient {
     return res.json();
   }
 
-  async checkHealth(): Promise<{ healthy: boolean; version?: string }> {
+  async checkHealth(): Promise<{ healthy: boolean; version?: string; bridgeEnabled?: boolean }> {
     try {
       const res = await fetch(`${this.baseUrl}/api/health`, {
         headers: this.headers(),
       });
-      if (res.ok) return await res.json();
-      throw new Error(`Health check failed: ${res.status}`);
-    } catch (e) {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return {
+        healthy: data.healthy === true || data.status === "ok",
+        version: data.version,
+        bridgeEnabled: data.bridgeEnabled,
+      };
+    } catch (e: any) {
       return { healthy: false };
     }
   }

@@ -159,8 +159,23 @@ async function startServer() {
     next();
   }
 
-  app.get("/api/health", authenticate, (req, res) => {
+  app.get("/api/health", authenticate, async (req, res) => {
+    let ocHealthy = false;
+    let ocVersion = undefined;
+    try {
+      const ocRes = await fetch(new URL("/global/health", config.opencodeBaseUrl), {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (ocRes.ok) {
+        const ocData = await ocRes.json();
+        ocHealthy = ocData.healthy === true;
+        ocVersion = ocData.version;
+      }
+    } catch (_) {}
     res.json({
+      healthy: ocHealthy,
+      version: ocVersion,
       status: "ok",
       bridgeEnabled: state.bridgeEnabled,
       connectedClients: state.connectedClients.size,

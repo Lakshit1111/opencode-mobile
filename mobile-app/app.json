@@ -17,7 +17,8 @@
       "adaptiveIcon": {
         "backgroundColor": "#0a0a0a"
       },
-      "package": "com.opencode.mobile"
+      "package": "com.opencode.mobile",
+      "usesCleartextTraffic": true
     },
     "extra": {
       "eas": {

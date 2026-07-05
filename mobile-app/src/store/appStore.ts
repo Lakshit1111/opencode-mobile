@@ -14,6 +14,7 @@ import type {
 import { client } from "../api/client";
 import { sseManager } from "../api/sse";
 import { saveConnection, loadConnection, clearConnection } from "../api/client";
+import { logger } from "../utils/logger";
 
 interface AppState {
   connection: ConnectionConfig | null;
@@ -56,18 +57,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   diffs: new Map(),
 
   setConnection: async (config: ConnectionConfig) => {
+    logger.info("store", "setConnection called", { url: config.bridgeUrl, keyLength: config.apiKey.length });
     client.configure(config);
     const health = await client.checkHealth();
     if (!health.healthy) {
+      logger.error("store", "setConnection failed — health check returned unhealthy", health);
       throw new Error("Cannot connect to OpenCode server. Make sure the bridge is running and OpenCode is started with 'opencode serve --port 8765'.");
     }
+    logger.info("store", "Health check passed, saving connection");
     await saveConnection(config);
     set({ connection: config, connected: true, bridgeEnabled: health.bridgeEnabled ?? true });
+    logger.info("store", "Connection established, starting event stream");
     get().startEventStream();
     get().fetchSessions();
   },
 
   disconnect: async () => {
+    logger.info("store", "disconnect called");
     get().stopEventStream();
     await clearConnection();
     set({
@@ -83,29 +89,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       todos: new Map(),
       diffs: new Map(),
     });
+    logger.info("store", "Disconnected and state cleared");
   },
 
   loadSavedConnection: async () => {
+    logger.info("store", "loadSavedConnection called");
     const config = await loadConnection();
     if (config) {
       client.configure(config);
       const health = await client.checkHealth();
       if (health.healthy) {
+        logger.info("store", "Saved connection is valid, restoring");
         set({ connection: config, connected: true, bridgeEnabled: health.bridgeEnabled ?? true });
         get().startEventStream();
         get().fetchSessions();
         return config;
+      } else {
+        logger.warn("store", "Saved connection is no longer valid", health);
       }
+    } else {
+      logger.info("store", "No saved connection to restore");
     }
     return null;
   },
 
   fetchSessions: async () => {
+    logger.info("store", "fetchSessions called");
     try {
       const sessions = await client.listSessions();
       const sessionMap = new Map<string, Session>();
       sessions.forEach((s) => sessionMap.set(s.id, s));
       set({ sessions: sessionMap });
+      logger.info("store", `fetchSessions: loaded ${sessions.length} sessions`);
 
       const statuses = await client.getSessionStatus();
       const statusMap = new Map<string, SessionStatus>();
@@ -113,12 +128,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         statusMap.set(id, status as SessionStatus);
       });
       set({ sessionStatuses: statusMap });
-    } catch (e) {
-      console.error("Failed to fetch sessions:", e);
+      logger.info("store", `fetchSessions: loaded ${statusMap.size} statuses`);
+    } catch (e: any) {
+      logger.error("store", "fetchSessions failed", { error: e.message });
     }
   },
 
   fetchMessages: async (sessionID: string) => {
+    logger.info("store", `fetchMessages called for ${sessionID}`);
     try {
       const msgs = await client.getSessionMessages(sessionID);
       set((state) => {
@@ -126,21 +143,25 @@ export const useAppStore = create<AppState>((set, get) => ({
         messages.set(sessionID, msgs);
         return { messages };
       });
-    } catch (e) {
-      console.error("Failed to fetch messages:", e);
+      logger.info("store", `fetchMessages: loaded ${msgs.length} messages`);
+    } catch (e: any) {
+      logger.error("store", `fetchMessages failed for ${sessionID}`, { error: e.message });
     }
   },
 
   sendMessage: async (sessionID: string, text: string) => {
+    logger.info("store", `sendMessage to ${sessionID}`, { textLength: text.length });
     try {
       await client.sendPrompt(sessionID, text);
-    } catch (e) {
-      console.error("Failed to send message:", e);
+      logger.info("store", "sendMessage success");
+    } catch (e: any) {
+      logger.error("store", `sendMessage failed`, { error: e.message });
       throw e;
     }
   },
 
   replyPermission: async (requestID: string, reply: "once" | "always" | "reject") => {
+    logger.info("store", `replyPermission ${requestID}: ${reply}`);
     await client.replyPermission(requestID, reply);
     set((state) => ({
       permissions: state.permissions.filter((p) => p.id !== requestID),
@@ -148,6 +169,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   replyQuestion: async (requestID: string, answers: string[][]) => {
+    logger.info("store", `replyQuestion ${requestID}`);
     await client.replyQuestion(requestID, answers);
     set((state) => ({
       questions: state.questions.filter((q) => q.id !== requestID),
@@ -155,6 +177,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createSession: async (title?: string) => {
+    logger.info("store", `createSession`, { title });
     try {
       const session = await client.createSession({ title });
       set((state) => {
@@ -162,22 +185,28 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessions.set(session.id, session);
         return { sessions };
       });
+      logger.info("store", `createSession success: ${session.id}`);
       return session;
-    } catch (e) {
-      console.error("Failed to create session:", e);
+    } catch (e: any) {
+      logger.error("store", "createSession failed", { error: e.message });
       return null;
     }
   },
 
   abortSession: async (sessionID: string) => {
+    logger.info("store", `abortSession ${sessionID}`);
     await client.abortSession(sessionID);
   },
 
   startEventStream: () => {
     const { connection } = get();
-    if (!connection) return;
+    if (!connection) {
+      logger.warn("store", "startEventStream called but no connection");
+      return;
+    }
 
     const url = client.getEventStreamUrl();
+    logger.info("store", "Starting event stream", { url });
     sseManager.connect(url);
 
     sseManager.on("*", (event: Event) => {
@@ -255,22 +284,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
           break;
         }
-        case "message.part.delta": {
+        case "message.part.delta":
+        case "message.part.removed":
+        case "message.removed":
+        case "file.edited":
+        case "command.executed":
           break;
-        }
-        case "message.part.removed": {
-          break;
-        }
-        case "message.removed": {
-          break;
-        }
         case "permission.asked": {
+          logger.info("store", "Permission requested", properties);
           set((state) => ({
             permissions: [...state.permissions, properties as PermissionRequest],
           }));
           break;
         }
         case "question.asked": {
+          logger.info("store", "Question asked", properties);
           set((state) => ({
             questions: [...state.questions, properties as QuestionRequest],
           }));
@@ -292,17 +320,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           });
           break;
         }
-        case "file.edited": {
-          break;
-        }
-        case "command.executed": {
-          break;
-        }
       }
     });
   },
 
   stopEventStream: () => {
+    logger.info("store", "stopEventStream called");
     sseManager.disconnect();
   },
 }));

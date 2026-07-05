@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
+import { logger } from "../utils/logger";
 
 export default function ConnectScreen() {
   const [bridgeUrl, setBridgeUrl] = useState("");
@@ -21,6 +22,7 @@ export default function ConnectScreen() {
   const { setConnection } = useAppStore();
 
   useEffect(() => {
+    logger.info("screen", "ConnectScreen mounted");
     setBridgeUrl("http://192.168.");
   }, []);
 
@@ -35,10 +37,13 @@ export default function ConnectScreen() {
     }
 
     const url = bridgeUrl.trim().replace(/\/+$/, "");
+    logger.info("screen", "Connect button pressed", { url, keyLength: apiKey.trim().length });
     setLoading(true);
     try {
       await setConnection({ bridgeUrl: url, apiKey: apiKey.trim() });
+      logger.info("screen", "Connection successful");
     } catch (e: any) {
+      logger.error("screen", "Connection failed", { error: e.message, url });
       Alert.alert(
         "Connection Failed",
         e.message || "Could not connect to the OpenCode bridge. Make sure it's running and the URL/key are correct."

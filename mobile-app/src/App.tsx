@@ -7,11 +7,13 @@ import { Colors } from "./constants/theme";
 import ConnectScreen from "./screens/ConnectScreen";
 import DashboardScreen from "./screens/DashboardScreen";
 import SessionScreen from "./screens/SessionScreen";
+import LogsScreen from "./screens/LogsScreen";
 
 export type RootStackParamList = {
   Connect: undefined;
   Dashboard: undefined;
   Session: { sessionID: string };
+  Logs: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -68,6 +70,11 @@ export default function App() {
                   title: "Session",
                   headerBackTitle: "Back",
                 })}
+              />
+              <Stack.Screen
+                name="Logs"
+                component={LogsScreen}
+                options={{ title: "Debug Logs", headerBackTitle: "Back" }}
               />
             </>
           ) : (

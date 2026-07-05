@@ -15,6 +15,8 @@ function loadConfig() {
     maxConnections: 5,
     bridgePort: 3456,
     opencodeBaseUrl: "http://127.0.0.1:8765",
+    opencodeUsername: "",
+    opencodePassword: "",
     autoStartBridge: true,
   };
   if (fs.existsSync(CONFIG_PATH)) {
@@ -48,15 +50,20 @@ function ensureApiKey(cfg) {
   return cfg;
 }
 
-async function proxyRequest(req, res, opencodeUrl, targetPath) {
+async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
   try {
     const url = new URL(targetPath, opencodeUrl);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
 
+    const headers = { ...req.headers, host: undefined };
+    if (opencodeAuth) {
+      headers["authorization"] = "Basic " + Buffer.from(opencodeAuth).toString("base64");
+    }
+
     const fetchOptions = {
       method: req.method,
-      headers: { ...req.headers, host: undefined },
+      headers: headers,
       signal: controller.signal,
     };
 
@@ -163,8 +170,12 @@ async function startServer() {
     let ocHealthy = false;
     let ocVersion = undefined;
     try {
+      const ocHeaders = { Accept: "application/json" };
+      if (config.opencodePassword) {
+        ocHeaders["Authorization"] = "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64");
+      }
       const ocRes = await fetch(new URL("/global/health", config.opencodeBaseUrl), {
-        headers: { Accept: "application/json" },
+        headers: ocHeaders,
         signal: AbortSignal.timeout(3000),
       });
       if (ocRes.ok) {
@@ -219,7 +230,8 @@ async function startServer() {
 
   app.all("/api/opencode/*", authenticate, checkIP, checkBridgeEnabled, checkConnectionLimit, async (req, res) => {
     const targetPath = "/" + req.params[0];
-    await proxyRequest(req, res, config.opencodeBaseUrl, targetPath);
+    const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
+    await proxyRequest(req, res, config.opencodeBaseUrl, targetPath, ocAuth);
   });
 
   app.get("/api/events", authenticate, checkIP, checkBridgeEnabled, (req, res) => {
@@ -238,12 +250,15 @@ async function startServer() {
     res.write(`event: connected\ndata: ${JSON.stringify({ clientId })}\n\n`);
 
     const controller = new AbortController();
+    const ocAuthHeaders = config.opencodePassword
+      ? { Accept: "text/event-stream", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
+      : { Accept: "text/event-stream" };
 
     (async () => {
       try {
         const eventUrl = new URL("/global/event", config.opencodeBaseUrl);
         const response = await fetch(eventUrl.toString(), {
-          headers: { Accept: "text/event-stream" },
+          headers: ocAuthHeaders,
           signal: controller.signal,
         });
 
@@ -293,12 +308,15 @@ async function startServer() {
     res.write(`event: connected\ndata: ${JSON.stringify({ clientId })}\n\n`);
 
     const controller = new AbortController();
+    const ocSyncHeaders = config.opencodePassword
+      ? { Accept: "text/event-stream", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
+      : { Accept: "text/event-stream" };
 
     (async () => {
       try {
         const eventUrl = new URL("/global/sync-event", config.opencodeBaseUrl);
         const response = await fetch(eventUrl.toString(), {
-          headers: { Accept: "text/event-stream" },
+          headers: ocSyncHeaders,
           signal: controller.signal,
         });
 

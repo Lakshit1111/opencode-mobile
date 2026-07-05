@@ -61,6 +61,9 @@ export default function DashboardScreen({ navigation }: Props) {
               <Text style={styles.badgeText}>{pendingCount}</Text>
             </View>
           )}
+          <TouchableOpacity onPress={() => navigation.navigate("Logs")} style={styles.logsBtn}>
+            <Text style={styles.logsText}>Logs</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={disconnect} style={styles.disconnectBtn}>
             <Text style={styles.disconnectText}>Disconnect</Text>
           </TouchableOpacity>
@@ -155,6 +158,18 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: FontSizes.xs,
     fontWeight: "700",
+  },
+  logsBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadii.sm,
+    borderWidth: 1,
+    borderColor: Colors.dark.accent,
+    marginRight: Spacing.sm,
+  },
+  logsText: {
+    color: Colors.dark.accent,
+    fontSize: FontSizes.sm,
   },
   disconnectBtn: {
     paddingHorizontal: Spacing.md,

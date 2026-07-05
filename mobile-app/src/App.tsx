@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
 import { useAppStore } from "./store/appStore";
 import { Colors } from "./constants/theme";
+import { logger } from "./utils/logger";
 import ConnectScreen from "./screens/ConnectScreen";
 import DashboardScreen from "./screens/DashboardScreen";
 import SessionScreen from "./screens/SessionScreen";
@@ -22,6 +23,7 @@ export default function App() {
   const { connection, loadSavedConnection, connected } = useAppStore();
 
   useEffect(() => {
+    logger.info("app", "App mounted, loading saved connection");
     loadSavedConnection();
   }, []);
 
@@ -66,10 +68,7 @@ export default function App() {
               <Stack.Screen
                 name="Session"
                 component={SessionScreen}
-                options={({ route }) => ({
-                  title: "Session",
-                  headerBackTitle: "Back",
-                })}
+                options={{ title: "Session", headerBackTitle: "Back" }}
               />
               <Stack.Screen
                 name="Logs"
@@ -78,11 +77,18 @@ export default function App() {
               />
             </>
           ) : (
-            <Stack.Screen
-              name="Connect"
-              component={ConnectScreen}
-              options={{ headerShown: false }}
-            />
+            <>
+              <Stack.Screen
+                name="Connect"
+                component={ConnectScreen}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="Logs"
+                component={LogsScreen}
+                options={{ title: "Debug Logs", headerBackTitle: "Back" }}
+              />
+            </>
           )}
         </Stack.Navigator>
       </NavigationContainer>

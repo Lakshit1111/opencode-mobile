@@ -11,11 +11,15 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
 import { logger } from "../utils/logger";
+import { RootStackParamList } from "../App";
 
-export default function ConnectScreen() {
+type Props = NativeStackScreenProps<RootStackParamList, "Connect">;
+
+export default function ConnectScreen({ navigation }: Props) {
   const [bridgeUrl, setBridgeUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -43,10 +47,14 @@ export default function ConnectScreen() {
       await setConnection({ bridgeUrl: url, apiKey: apiKey.trim() });
       logger.info("screen", "Connection successful");
     } catch (e: any) {
-      logger.error("screen", "Connection failed", { error: e.message, url });
+      logger.error("screen", "Connection failed", { error: e.message, url, stack: e.stack });
       Alert.alert(
         "Connection Failed",
-        e.message || "Could not connect to the OpenCode bridge. Make sure it's running and the URL/key are correct."
+        e.message || "Could not connect to the OpenCode bridge. Make sure it's running and the URL/key are correct.",
+        [
+          { text: "View Logs", onPress: () => navigation.navigate("Logs") },
+          { text: "OK" },
+        ]
       );
     } finally {
       setLoading(false);
@@ -106,6 +114,13 @@ export default function ConnectScreen() {
             ) : (
               <Text style={styles.buttonText}>Connect</Text>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.logsButton}
+            onPress={() => navigation.navigate("Logs")}
+          >
+            <Text style={styles.logsButtonText}>View Logs</Text>
           </TouchableOpacity>
         </View>
 
@@ -187,6 +202,19 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: FontSizes.lg,
     fontWeight: "600",
+  },
+  logsButton: {
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.dark.border,
+    borderRadius: BorderRadii.md,
+  },
+  logsButtonText: {
+    color: Colors.dark.accent,
+    fontSize: FontSizes.md,
+    fontWeight: "500",
   },
   footer: {
     marginTop: Spacing.xxl,

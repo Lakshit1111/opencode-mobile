@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { View, Text, TouchableOpacity, TextInput, StyleSheet } from "react-native";
 import type { QuestionRequest } from "../types/opencode";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
+import { logger } from "../utils/logger";
 
 interface Props {
   request: QuestionRequest;
@@ -40,7 +41,10 @@ export default function QuestionCard({ request, onReply }: Props) {
         }
         return selected;
       });
+      logger.info("ui", `Submitting question reply for ${request.id}`, { answers });
       await onReply(request.id, answers);
+    } catch (e: any) {
+      logger.error("ui", "Question reply failed", { error: e.message });
     } finally {
       setLoading(false);
     }

@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import type { Part } from "../types/opencode";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
+import { logger } from "../utils/logger";
 
 interface Props {
   messageID: string;
@@ -12,10 +13,13 @@ interface Props {
 export default function MessagePart({ messageID, role, part }: Props) {
   switch (part.type) {
     case "text":
+      logger.debug("ui", `Render text part (msg=${messageID})`, { role, textLen: part.text?.length });
       return <TextPart role={role} part={part} />;
     case "reasoning":
+      logger.debug("ui", `Render reasoning part (msg=${messageID})`, { textLen: part.text?.length });
       return <ReasoningBlock part={part} />;
     case "tool":
+      logger.debug("ui", `Render tool part (msg=${messageID})`, { tool: part.tool, status: part.state?.status });
       return <ToolCall part={part} />;
     case "step-start":
       return <StepStart part={part} />;
@@ -24,6 +28,7 @@ export default function MessagePart({ messageID, role, part }: Props) {
     case "subtask":
       return <SubtaskBlock part={part} />;
     default:
+      logger.warn("ui", `Unknown part type: ${(part as any).type}`);
       return null;
   }
 }

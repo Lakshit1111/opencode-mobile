@@ -2,7 +2,7 @@ import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import type { PermissionRequest } from "../types/opencode";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
-import { useAppStore } from "../store/appStore";
+import { logger } from "../utils/logger";
 
 interface Props {
   request: PermissionRequest;
@@ -13,9 +13,12 @@ export default function PermissionCard({ request, onReply }: Props) {
   const [loading, setLoading] = React.useState(false);
 
   const handleReply = async (reply: "once" | "always" | "reject") => {
+    logger.info("ui", `Permission reply: ${reply} for ${request.id}`, { permission: request.permission, patterns: request.patterns });
     setLoading(true);
     try {
       await onReply(request.id, reply);
+    } catch (e: any) {
+      logger.error("ui", `Permission reply failed`, { error: e.message });
     } finally {
       setLoading(false);
     }

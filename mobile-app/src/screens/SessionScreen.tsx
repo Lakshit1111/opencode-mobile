@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
+import { logger } from "../utils/logger";
 import { RootStackParamList } from "../App";
 import MessagePart from "../components/MessagePart";
 import PermissionCard from "../components/PermissionCard";
@@ -52,6 +53,7 @@ export default function SessionScreen({ route, navigation }: Props) {
   const sessionTodos = todos.get(sessionID) || [];
 
   useEffect(() => {
+    logger.info("session", `SessionScreen mounted for ${sessionID}`, { title: session?.title });
     fetchMessages(sessionID);
   }, [sessionID]);
 
@@ -62,6 +64,7 @@ export default function SessionScreen({ route, navigation }: Props) {
   }, [session?.title]);
 
   useEffect(() => {
+    logger.debug("session", `Messages updated: ${sessionMessages.length} messages, ${allParts.length} parts`);
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
     }, 100);
@@ -70,11 +73,14 @@ export default function SessionScreen({ route, navigation }: Props) {
   const handleSend = async () => {
     if (!inputText.trim() || sending) return;
     const text = inputText.trim();
+    logger.info("session", `Sending message to ${sessionID}`, { textLength: text.length });
     setInputText("");
     setSending(true);
     try {
       await sendMessage(sessionID, text);
-    } catch (e) {
+      logger.info("session", "Message sent successfully");
+    } catch (e: any) {
+      logger.error("session", "Send message failed", { error: e.message });
       setInputText(text);
     } finally {
       setSending(false);
@@ -82,7 +88,18 @@ export default function SessionScreen({ route, navigation }: Props) {
   };
 
   const handleAbort = async () => {
+    logger.info("session", `Aborting session ${sessionID}`);
     await abortSession(sessionID);
+  };
+
+  const handleReplyPermission = async (requestID: string, reply: "once" | "always" | "reject") => {
+    logger.info("session", `Replying to permission ${requestID}: ${reply}`);
+    await replyPermission(requestID, reply);
+  };
+
+  const handleReplyQuestion = async (requestID: string, answers: string[][]) => {
+    logger.info("session", `Replying to question ${requestID}`);
+    await replyQuestion(requestID, answers);
   };
 
   const sortedMessages = [...sessionMessages].sort(
@@ -131,7 +148,7 @@ export default function SessionScreen({ route, navigation }: Props) {
         {sessionPermissions.length > 0 && (
           <View style={styles.permissionsContainer}>
             {sessionPermissions.map((p) => (
-              <PermissionCard key={p.id} request={p} onReply={replyPermission} />
+              <PermissionCard key={p.id} request={p} onReply={handleReplyPermission} />
             ))}
           </View>
         )}
@@ -139,7 +156,7 @@ export default function SessionScreen({ route, navigation }: Props) {
         {sessionQuestions.length > 0 && (
           <View style={styles.questionsContainer}>
             {sessionQuestions.map((q) => (
-              <QuestionCard key={q.id} request={q} onReply={replyQuestion} />
+              <QuestionCard key={q.id} request={q} onReply={handleReplyQuestion} />
             ))}
           </View>
         )}

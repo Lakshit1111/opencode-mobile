@@ -20,6 +20,17 @@
       "package": "com.opencode.mobile",
       "usesCleartextTraffic": true
     },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "networkSecurityConfig": false
+          }
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "5c6f8072-bdeb-4a8f-8171-8607a7a4599f"

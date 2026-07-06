@@ -8,6 +8,16 @@ const http = require("http");
 const CONFIG_PATH = path.join(__dirname, "config.json");
 const PUBLIC_PATH = path.join(__dirname, "public");
 
+const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+function log(level, tag, message, data) {
+  const cfg = global.__BRIDGE_CFG__ || { logLevel: "info" };
+  if ((LEVELS[level] ?? 2) > (LEVELS[cfg.logLevel] ?? 2)) return;
+  const ts = new Date().toISOString();
+  const prefix = `[${ts}] [${level.toUpperCase()}] [${tag}]`;
+  if (data !== undefined) console.log(prefix, message, data);
+  else console.log(prefix, message);
+}
+
 function loadConfig() {
   const defaults = {
     apiKey: "",
@@ -18,6 +28,7 @@ function loadConfig() {
     opencodeUsername: "",
     opencodePassword: "",
     autoStartBridge: true,
+    logLevel: "info",
   };
   if (fs.existsSync(CONFIG_PATH)) {
     try {
@@ -51,8 +62,10 @@ function ensureApiKey(cfg) {
 }
 
 async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
+  const proxyStart = Date.now();
   try {
     const url = new URL(targetPath, opencodeUrl);
+    log("debug", "proxy", `${req.method} ${targetPath} -> OpenCode ${url.toString()}`);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
 
@@ -78,6 +91,7 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
 
     const response = await fetch(url.toString(), fetchOptions);
     clearTimeout(timeout);
+    log("info", "proxy", `${req.method} ${targetPath} -> ${response.status} (${Date.now() - proxyStart}ms)`);
 
     res.status(response.status);
     response.headers.forEach((val, key) => {
@@ -100,6 +114,7 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     res.send(Buffer.from(body));
     return null;
   } catch (err) {
+    log("error", "proxy", `${req.method} ${targetPath} failed (${Date.now() - proxyStart}ms)`, { error: err.message });
     if (!res.headersSent) {
       res.status(502).json({ error: "Failed to reach OpenCode server", details: err.message });
     }
@@ -110,10 +125,19 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
 async function startServer() {
   let config = loadConfig();
   config = ensureApiKey(config);
+  global.__BRIDGE_CFG__ = config;
+  log("info", "bridge", "Config loaded", { bridgePort: config.bridgePort, opencodeBaseUrl: config.opencodeBaseUrl, logLevel: config.logLevel });
 
   const app = express();
   app.use(cors());
   app.use(express.json());
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on("finish", () => {
+      log("info", "http", `${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - start}ms)`, { ip: req.ip });
+    });
+    next();
+  });
   app.use(express.static(PUBLIC_PATH));
 
   const state = {
@@ -129,8 +153,10 @@ async function startServer() {
       : req.query?.token;
 
     if (!token || token !== config.apiKey) {
+      log("warn", "auth", `Rejected ${req.method} ${req.path}`, { ip: req.ip, hasToken: !!token });
       return res.status(401).json({ error: "Unauthorized. Provide a valid API key via Authorization: Bearer <token>" });
     }
+    log("debug", "auth", `Accepted ${req.method} ${req.path}`, { ip: req.ip });
     next();
   }
 
@@ -218,7 +244,7 @@ async function startServer() {
   });
 
   app.put("/api/config", authenticate, (req, res) => {
-    const allowed = ["allowedIPs", "maxConnections", "opencodeBaseUrl"];
+    const allowed = ["allowedIPs", "maxConnections", "opencodeBaseUrl", "logLevel"];
     allowed.forEach((key) => {
       if (req.body[key] !== undefined) {
         config[key] = req.body[key];
@@ -240,6 +266,7 @@ async function startServer() {
       ip: req.ip || req.connection.remoteAddress,
       connectedAt: new Date().toISOString(),
     });
+    log("info", "sse", `Client connected: ${clientId} from ${req.ip} (total: ${state.connectedClients.size})`);
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -293,11 +320,13 @@ async function startServer() {
     req.on("close", () => {
       controller.abort();
       state.connectedClients.delete(clientId);
+      log("info", "sse", `Client disconnected: ${clientId} (total: ${state.connectedClients.size})`);
     });
   });
 
   app.get("/api/sync-events", authenticate, checkIP, checkBridgeEnabled, (req, res) => {
     const clientId = crypto.randomBytes(8).toString("hex");
+    log("info", "sse-sync", `Client connected: ${clientId} from ${req.ip}`);
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -350,6 +379,7 @@ async function startServer() {
 
     req.on("close", () => {
       controller.abort();
+      log("info", "sse-sync", `Client disconnected: ${clientId}`);
     });
   });
 

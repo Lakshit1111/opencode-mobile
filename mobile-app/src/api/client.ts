@@ -81,18 +81,26 @@ class OpenCodeClient {
 
   async checkHealth(): Promise<{ healthy: boolean; version?: string; bridgeEnabled?: boolean }> {
     const url = `${this.baseUrl}/api/health`;
-    logger.info("client", "Health check starting", { url });
+    logger.info("client", "Health check starting", { url, baseUrl: this.baseUrl, keyLength: this.apiKey.length });
 
     try {
       const startTime = Date.now();
+      logger.debug("client", "Fetching...", { url, method: "GET" });
       const res = await fetch(url, {
         headers: this.headers(),
+        signal: AbortSignal.timeout(10000),
       });
       const elapsed = Date.now() - startTime;
 
+      logger.info("client", `Health check response: HTTP ${res.status} in ${elapsed}ms`, {
+        status: res.status,
+        ok: res.ok,
+        headers: { "content-type": res.headers.get("content-type") },
+      });
+
       if (!res.ok) {
         const body = await res.text();
-        logger.error("client", `Health check failed: HTTP ${res.status} in ${elapsed}ms`, { status: res.status, body });
+        logger.error("client", `Health check failed: HTTP ${res.status}`, { status: res.status, body: body.substring(0, 500) });
         throw new Error(`HTTP ${res.status}: ${body}`);
       }
 
@@ -102,10 +110,17 @@ class OpenCodeClient {
         version: data.version,
         bridgeEnabled: data.bridgeEnabled,
       };
-      logger.info("client", `Health check OK in ${elapsed}ms`, result);
+      logger.info("client", `Health check OK`, result);
       return result;
     } catch (e: any) {
-      logger.error("client", "Health check network error", { error: e.message, cause: e.cause, url });
+      logger.error("client", "Health check network error (fetch threw)", {
+        error: e.message,
+        cause: e.cause,
+        name: e.name,
+        stack: e.stack?.substring(0, 300),
+        url,
+        baseUrl: this.baseUrl,
+      });
       return { healthy: false };
     }
   }

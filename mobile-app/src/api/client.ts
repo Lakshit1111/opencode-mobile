@@ -86,10 +86,13 @@ class OpenCodeClient {
     try {
       const startTime = Date.now();
       logger.debug("client", "Fetching...", { url, method: "GET" });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       const res = await fetch(url, {
         headers: this.headers(),
-        signal: AbortSignal.timeout(10000),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       const elapsed = Date.now() - startTime;
 
       logger.info("client", `Health check response: HTTP ${res.status} in ${elapsed}ms`, {

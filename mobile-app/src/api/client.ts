@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project } from "../types/opencode";
+import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project, Agent, ConfigProviders } from "../types/opencode";
 import { logger } from "../utils/logger";
 
 const CONNECTION_KEY = "@opencode_connection";
@@ -200,6 +200,18 @@ class OpenCodeClient {
     return projects;
   }
 
+  async listAgents(): Promise<Agent[]> {
+    const agents = await this.request<Agent[]>("/agent");
+    logger.info("client", `Loaded ${agents.length} agents`);
+    return agents;
+  }
+
+  async listConfigProviders(): Promise<ConfigProviders> {
+    const result = await this.request<ConfigProviders>("/config/providers");
+    logger.info("client", `Loaded ${result.providers.length} providers`);
+    return result;
+  }
+
   async getSession(sessionID: string): Promise<Session> {
     return this.request<Session>(`/session/${sessionID}`);
   }
@@ -238,25 +250,63 @@ class OpenCodeClient {
       model?: { providerID: string; modelID: string };
     }
   ): Promise<void> {
-    logger.info("client", `Sending prompt to ${sessionID}`, { textLength: text.length });
-    await this.request<void>(`/session/${sessionID}/prompt_async`, {
-      method: "POST",
-      body: JSON.stringify({
-        parts: [{ type: "text", text }],
-        ...options,
-      }),
+    const url = `${this.baseUrl}/api/opencode/session/${sessionID}/message`;
+    const body = JSON.stringify({
+      parts: [{ type: "text", text }],
+      ...options,
     });
+    logger.info("client", `Sending prompt to ${sessionID}`, { textLength: text.length, url, bodyLen: body.length });
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000);
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      logger.info("client", `sendPrompt response: ${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        const errText = await res.text();
+        logger.error("client", `sendPrompt failed: ${res.status}`, { body: errText });
+        throw new Error(`API Error ${res.status}: ${errText}`);
+      }
+    } catch (e: any) {
+      logger.error("client", `sendPrompt network error`, { error: e.message, cause: e.cause?.message });
+      throw e;
+    }
   }
 
   async createSession(options?: {
     title?: string;
     directory?: string;
   }): Promise<Session> {
-    logger.info("client", "Creating new session", options);
-    return this.request<Session>("/session", {
-      method: "POST",
-      body: JSON.stringify(options || {}),
-    });
+    const url = `${this.baseUrl}/api/opencode/session`;
+    logger.info("client", "Creating new session", { ...options, url });
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(options || {}),
+      });
+      logger.info("client", `createSession response: ${res.status}`);
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`API Error ${res.status}: ${errText}`);
+      }
+      return await res.json() as Session;
+    } catch (e: any) {
+      logger.error("client", `createSession network error`, { error: e.message });
+      throw e;
+    }
   }
 
   async replyPermission(

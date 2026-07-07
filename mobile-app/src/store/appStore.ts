@@ -10,6 +10,8 @@ import type {
   ConnectionConfig,
   FileDiff,
   Event,
+  Agent,
+  ConfigProviders,
 } from "../types/opencode";
 import { client } from "../api/client";
 import { sseManager } from "../api/sse";
@@ -32,11 +34,19 @@ interface AppState {
   questions: QuestionRequest[];
   todos: Map<string, Todo[]>;
   diffs: Map<string, FileDiff[]>;
+  agents: Agent[];
+  providers: ConfigProviders | null;
+  selectedAgent: string;
+  selectedModel: { providerID: string; modelID: string } | null;
 
   setConnection: (config: ConnectionConfig) => Promise<void>;
   disconnect: () => Promise<void>;
   loadSavedConnection: () => Promise<ConnectionConfig | null>;
   fetchSessions: () => Promise<void>;
+  fetchAgents: () => Promise<void>;
+  fetchProviders: () => Promise<void>;
+  setSelectedAgent: (agent: string) => void;
+  setSelectedModel: (model: { providerID: string; modelID: string } | null) => void;
   fetchMessages: (sessionID: string) => Promise<void>;
   loadMoreMessages: (sessionID: string) => Promise<void>;
   sendMessage: (sessionID: string, text: string) => Promise<void>;
@@ -64,6 +74,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   questions: [],
   todos: new Map(),
   diffs: new Map(),
+  agents: [],
+  providers: null,
+  selectedAgent: "build",
+  selectedModel: null,
 
   setConnection: async (config: ConnectionConfig) => {
     logger.info("store", "setConnection called", { url: config.bridgeUrl, keyLength: config.apiKey.length });
@@ -79,6 +93,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     logger.info("store", "Connection established, starting event stream");
     get().startEventStream();
     get().fetchSessions();
+    get().fetchAgents();
+    get().fetchProviders();
   },
 
   disconnect: async () => {
@@ -97,6 +113,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       questions: [],
       todos: new Map(),
       diffs: new Map(),
+      agents: [],
+      providers: null,
+      selectedAgent: "build",
+      selectedModel: null,
     });
     logger.info("store", "Disconnected and state cleared");
   },
@@ -112,6 +132,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ connection: config, connected: true, bridgeEnabled: health.bridgeEnabled ?? true });
         get().startEventStream();
         get().fetchSessions();
+        get().fetchAgents();
+        get().fetchProviders();
         return config;
       } else {
         logger.warn("store", "Saved connection is no longer valid", health);
@@ -167,6 +189,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e: any) {
       logger.error("store", "fetchSessions failed", { error: e.message });
     }
+  },
+
+  fetchAgents: async () => {
+    logger.info("store", "fetchAgents called");
+    try {
+      const agents = await client.listAgents();
+      set({ agents });
+      logger.info("store", `fetchAgents: loaded ${agents.length} agents`);
+    } catch (e: any) {
+      logger.error("store", "fetchAgents failed", { error: e.message });
+    }
+  },
+
+  fetchProviders: async () => {
+    logger.info("store", "fetchProviders called");
+    try {
+      const providers = await client.listConfigProviders();
+      set({ providers });
+      const defaults = providers.default;
+      const firstDefault = Object.entries(defaults)[0];
+      if (firstDefault && !get().selectedModel) {
+        const [providerID, modelID] = firstDefault;
+        set({ selectedModel: { providerID, modelID } });
+        logger.info("store", `fetchProviders: set default model`, { providerID, modelID });
+      }
+      logger.info("store", `fetchProviders: loaded ${providers.providers.length} providers`);
+    } catch (e: any) {
+      logger.error("store", "fetchProviders failed", { error: e.message });
+    }
+  },
+
+  setSelectedAgent: (agent: string) => {
+    logger.info("store", `Selected agent: ${agent}`);
+    set({ selectedAgent: agent });
+  },
+
+  setSelectedModel: (model: { providerID: string; modelID: string } | null) => {
+    logger.info("store", `Selected model`, model);
+    set({ selectedModel: model });
   },
 
   fetchMessages: async (sessionID: string) => {
@@ -259,9 +320,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: async (sessionID: string, text: string) => {
-    logger.info("store", `sendMessage to ${sessionID}`, { textLength: text.length });
+    const { selectedAgent, selectedModel } = get();
+    logger.info("store", `sendMessage to ${sessionID}`, { textLength: text.length, agent: selectedAgent, model: selectedModel });
     try {
-      await client.sendPrompt(sessionID, text);
+      await client.sendPrompt(sessionID, text, {
+        agent: selectedAgent !== "build" ? selectedAgent : undefined,
+        model: selectedModel || undefined,
+      });
       logger.info("store", "sendMessage success");
       setTimeout(() => {
         logger.debug("store", `sendMessage safety-net fetch for ${sessionID}`);

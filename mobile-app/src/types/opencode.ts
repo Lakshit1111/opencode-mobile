@@ -222,3 +222,28 @@ export interface Project {
   worktree: string;
   time?: { created: number; updated: number };
 }
+
+export interface Agent {
+  name: string;
+  description?: string;
+  builtIn?: boolean;
+  public?: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  providerID: string;
+  name: string;
+  status?: string;
+}
+
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  models: Record<string, ModelInfo>;
+}
+
+export interface ConfigProviders {
+  providers: ProviderInfo[];
+  default: Record<string, string>;
+}

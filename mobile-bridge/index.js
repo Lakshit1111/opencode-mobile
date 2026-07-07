@@ -131,23 +131,36 @@ async function discoverOpenCodeServer(configuredUrl, configuredUser, configuredP
   if (envPassword) authHeaders.add(basicAuthHeader(envUser, envPassword));
 
   let best = null;
+  const allWorking = [];
   for (const url of candidates) {
     const noAuthResult = await tryServer(url, undefined);
     let authResult = null;
+    let usedAuth = null;
     for (const auth of authHeaders) {
       if (auth === undefined) continue;
       const r = await tryServer(url, auth);
-      if (r) { authResult = { ...r, authHeader: auth }; break; }
+      if (r) { authResult = { ...r, authHeader: auth }; usedAuth = auth; break; }
     }
     const result = authResult || noAuthResult;
     if (result) {
       const requiresAuth = !noAuthResult && !!authResult;
       const score = result.sessionCount + (requiresAuth ? 10000 : 0);
+      const serverInfo = {
+        url: result.url,
+        sessionCount: result.sessionCount,
+        username: requiresAuth ? envUser || configuredUser : "",
+        password: requiresAuth ? (envPassword || configuredPass || "") : "",
+        score,
+      };
+      allWorking.push(serverInfo);
       log("debug", "discovery", `Candidate scored`, { url, sessions: result.sessionCount, requiresAuth, score });
       if (!best || score > best.score) {
-        best = { ...result, score, username: requiresAuth ? envUser || configuredUser : "", password: requiresAuth ? (envPassword || configuredPass || "") : "" };
+        best = serverInfo;
       }
     }
+  }
+  if (best) {
+    best.allServers = allWorking.map(s => ({ url: s.url, username: s.username, password: s.password }));
   }
   return best;
 }
@@ -158,7 +171,9 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     const url = new URL(targetPath, opencodeUrl);
     log("debug", "proxy", `${req.method} ${targetPath} -> OpenCode ${url.toString()}`);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const isSyncPost = req.method === "POST" && targetPath.includes("/message") && !targetPath.includes("/prompt_async");
+    const timeoutMs = isSyncPost ? 300000 : 30000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     const headers = { ...req.headers, host: undefined };
     delete headers["content-length"];
@@ -195,6 +210,11 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     const response = await fetch(url.toString(), fetchOptions);
     clearTimeout(timeout);
     log("info", "proxy", `${req.method} ${targetPath} -> ${response.status} (${Date.now() - proxyStart}ms)`);
+
+    if (response.status === 500 && req.method === "POST") {
+      log("warn", "proxy", `Got 500 for POST ${targetPath}, returning null for fallback`);
+      return null;
+    }
 
     res.status(response.status);
     response.headers.forEach((val, key) => {
@@ -257,6 +277,7 @@ async function startServer() {
   global.__BRIDGE_CFG__ = config;
   log("info", "bridge", "Config loaded", { bridgePort: config.bridgePort, opencodeBaseUrl: config.opencodeBaseUrl, logLevel: config.logLevel });
 
+  const discoveredServers = [];
   if (config.autoDiscover) {
     const discovered = await discoverOpenCodeServer(config.opencodeBaseUrl, config.opencodeUsername, config.opencodePassword);
     if (discovered) {
@@ -265,10 +286,49 @@ async function startServer() {
       config.opencodePassword = discovered.password || "";
       global.__BRIDGE_CFG__ = config;
       log("info", "bridge", `Auto-discovered OpenCode server`, { url: discovered.url, sessions: discovered.sessionCount });
+      if (discovered.allServers) {
+        discoveredServers.push(...discovered.allServers);
+        log("info", "bridge", `All discovered servers`, { count: discoveredServers.length, urls: discoveredServers.map(s => s.url) });
+      } else {
+        discoveredServers.push({ url: discovered.url, username: discovered.username || "", password: discovered.password || "" });
+      }
     } else {
       log("warn", "bridge", "Auto-discover failed, using configured URL", { url: config.opencodeBaseUrl });
+      discoveredServers.push({ url: config.opencodeBaseUrl, username: config.opencodeUsername, password: config.opencodePassword });
+    }
+  } else {
+    discoveredServers.push({ url: config.opencodeBaseUrl, username: config.opencodeUsername, password: config.opencodePassword });
+  }
+
+  let reDiscovering = false;
+  async function checkHealthAndReDiscover() {
+    if (reDiscovering) return;
+    try {
+      const authHdr = config.opencodePassword ? basicAuthHeader(config.opencodeUsername, config.opencodePassword) : undefined;
+      const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
+      if (authHdr) headers["Authorization"] = authHdr;
+      const r = await fetch(config.opencodeBaseUrl + "/global/health", { headers, signal: AbortSignal.timeout(3000) });
+      if (r.ok) return;
+    } catch {
+    }
+    log("warn", "bridge", "OpenCode server unreachable, re-discovering...", { url: config.opencodeBaseUrl });
+    reDiscovering = true;
+    try {
+      const discovered = await discoverOpenCodeServer(config.opencodeBaseUrl, config.opencodeUsername, config.opencodePassword);
+      if (discovered) {
+        config.opencodeBaseUrl = discovered.url;
+        config.opencodeUsername = discovered.username || "";
+        config.opencodePassword = discovered.password || "";
+        global.__BRIDGE_CFG__ = config;
+        log("info", "bridge", `Re-discovered OpenCode server`, { url: discovered.url, sessions: discovered.sessionCount });
+      }
+    } catch (e) {
+      log("error", "bridge", "Re-discovery failed", { error: e.message });
+    } finally {
+      reDiscovering = false;
     }
   }
+  setInterval(checkHealthAndReDiscover, 30000);
 
   const app = express();
   app.use(cors());
@@ -411,8 +471,27 @@ async function startServer() {
       connectedClients: state.connectedClients.size,
       maxConnections: config.maxConnections,
     });
-    const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
-    await proxyRequest(req, res, config.opencodeBaseUrl, targetWithPathQuery, ocAuth);
+
+    const isPostToSession = req.method === "POST" && targetPath.match(/^\/session\/[^/]+\/(prompt_async|message|abort)/);
+    if (isPostToSession) {
+      for (const srv of discoveredServers) {
+        const ocAuth = srv.password ? `${srv.username}:${srv.password}` : null;
+        log("debug", "proxy", `Trying server ${srv.url} for ${targetWithPathQuery}`);
+        const result = await proxyRequest(req, res, srv.url, targetWithPathQuery, ocAuth);
+        if (result === null && !res.headersSent) {
+          log("debug", "proxy", `Server ${srv.url} returned null (500 or error), trying next...`);
+          continue;
+        }
+        return;
+      }
+      if (!res.headersSent) {
+        log("error", "proxy", `All servers failed for ${targetWithPathQuery}`);
+        res.status(502).json({ error: "All OpenCode servers failed to process request" });
+      }
+    } else {
+      const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
+      await proxyRequest(req, res, config.opencodeBaseUrl, targetWithPathQuery, ocAuth);
+    }
   });
 
   app.get("/api/test/proxy", authenticate, async (req, res) => {

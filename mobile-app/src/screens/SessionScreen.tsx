@@ -21,6 +21,7 @@ import MessageBubble from "../components/MessageBubble";
 import PermissionCard from "../components/PermissionCard";
 import QuestionCard from "../components/QuestionCard";
 import TodoList from "../components/TodoList";
+import ModelAgentSelector from "../components/ModelAgentSelector";
 import type { Message } from "../types/opencode";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Session">;
@@ -47,6 +48,12 @@ export default function SessionScreen({ route, navigation }: Props) {
     replyQuestion,
     messageLoadingMore,
     messageHasMore,
+    agents,
+    providers,
+    selectedAgent,
+    selectedModel,
+    setSelectedAgent,
+    setSelectedModel,
   } = useAppStore();
 
   const session = sessions.get(sessionID);
@@ -189,6 +196,15 @@ export default function SessionScreen({ route, navigation }: Props) {
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.3}
           ListFooterComponent={ListFooter}
+        />
+
+        <ModelAgentSelector
+          agents={agents}
+          providers={providers}
+          selectedAgent={selectedAgent}
+          selectedModel={selectedModel}
+          onSelectAgent={setSelectedAgent}
+          onSelectModel={setSelectedModel}
         />
 
         <View style={styles.inputContainer}>

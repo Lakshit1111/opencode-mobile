@@ -3,6 +3,7 @@ const cors = require("cors");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const zlib = require("zlib");
 const http = require("http");
 
 const CONFIG_PATH = path.join(__dirname, "config.json");
@@ -115,7 +116,29 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     }
 
     const body = await response.arrayBuffer();
-    res.send(Buffer.from(body));
+    let bodyBuffer = Buffer.from(body);
+    const encoding = (response.headers.get("content-encoding") || "").toLowerCase();
+    if (encoding.includes("gzip")) {
+      try {
+        bodyBuffer = zlib.gunzipSync(bodyBuffer);
+        log("debug", "proxy", "Decompressed gzip response", { original: body.length, decompressed: bodyBuffer.length });
+      } catch (e) {
+        log("error", "proxy", "Failed to decompress gzip", { error: e.message });
+      }
+    } else if (encoding.includes("deflate")) {
+      try {
+        bodyBuffer = zlib.inflateSync(bodyBuffer);
+      } catch (e) {
+        log("error", "proxy", "Failed to decompress deflate", { error: e.message });
+      }
+    } else if (encoding.includes("br")) {
+      try {
+        bodyBuffer = zlib.brotliDecompressSync(bodyBuffer);
+      } catch (e) {
+        log("error", "proxy", "Failed to decompress brotli", { error: e.message });
+      }
+    }
+    res.send(bodyBuffer);
     return null;
   } catch (err) {
     log("error", "proxy", `${req.method} ${targetPath} failed (${Date.now() - proxyStart}ms)`, { error: err.message });

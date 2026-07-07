@@ -24,6 +24,10 @@ interface AppState {
   sessionStatuses: Map<string, SessionStatus>;
   messages: Map<string, Message[]>;
   parts: Map<string, Map<string, Part>>;
+  messageLimits: Map<string, number>;
+  messageHasMore: Map<string, boolean>;
+  messageLoadingMore: Set<string>;
+  lastFetchTime: Map<string, number>;
   permissions: PermissionRequest[];
   questions: QuestionRequest[];
   todos: Map<string, Todo[]>;
@@ -34,6 +38,7 @@ interface AppState {
   loadSavedConnection: () => Promise<ConnectionConfig | null>;
   fetchSessions: () => Promise<void>;
   fetchMessages: (sessionID: string) => Promise<void>;
+  loadMoreMessages: (sessionID: string) => Promise<void>;
   sendMessage: (sessionID: string, text: string) => Promise<void>;
   replyPermission: (requestID: string, reply: "once" | "always" | "reject") => Promise<void>;
   replyQuestion: (requestID: string, answers: string[][]) => Promise<void>;
@@ -51,6 +56,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionStatuses: new Map(),
   messages: new Map(),
   parts: new Map(),
+  messageLimits: new Map(),
+  messageHasMore: new Map(),
+  messageLoadingMore: new Set(),
+  lastFetchTime: new Map(),
   permissions: [],
   questions: [],
   todos: new Map(),
@@ -162,11 +171,19 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   fetchMessages: async (sessionID: string) => {
     logger.info("store", `fetchMessages called for ${sessionID}`);
+    const now = Date.now();
+    const last = get().lastFetchTime.get(sessionID) || 0;
+    if (now - last < 10000 && get().messages.has(sessionID)) {
+      logger.debug("store", `fetchMessages skipped (throttled, ${now - last}ms since last)`);
+      return;
+    }
+    const limit = get().messageLimits.get(sessionID) || 10;
     try {
-      const entries = await client.getSessionMessages(sessionID);
+      const entries = await client.getSessionMessages(sessionID, limit);
+      const infoList = entries.map((e) => e.info);
       set((state) => {
         const messages = new Map(state.messages);
-        messages.set(sessionID, entries.map((e) => e.info));
+        messages.set(sessionID, infoList);
         const parts = new Map(state.parts);
         entries.forEach((e) => {
           const msgKey = `${sessionID}:${e.info.id}`;
@@ -174,11 +191,67 @@ export const useAppStore = create<AppState>((set, get) => ({
           e.parts.forEach((p) => msgParts.set(p.id, p));
           parts.set(msgKey, msgParts);
         });
-        return { messages, parts };
+        const messageLimits = new Map(state.messageLimits);
+        messageLimits.set(sessionID, limit);
+        const messageHasMore = new Map(state.messageHasMore);
+        messageHasMore.set(sessionID, entries.length === limit);
+        const lastFetchTime = new Map(state.lastFetchTime);
+        lastFetchTime.set(sessionID, now);
+        return { messages, parts, messageLimits, messageHasMore, lastFetchTime };
       });
-      logger.info("store", `fetchMessages: loaded ${entries.length} messages`);
+      logger.info("store", `fetchMessages: loaded ${entries.length} messages (limit=${limit})`);
     } catch (e: any) {
       logger.error("store", `fetchMessages failed for ${sessionID}`, { error: e.message });
+    }
+  },
+
+  loadMoreMessages: async (sessionID: string) => {
+    if (get().messageLoadingMore.has(sessionID)) {
+      logger.debug("store", `loadMoreMessages skipped (already loading)`);
+      return;
+    }
+    const hasMore = get().messageHasMore.get(sessionID);
+    if (hasMore === false) {
+      logger.debug("store", `loadMoreMessages skipped (no more)`);
+      return;
+    }
+    const currentLimit = get().messageLimits.get(sessionID) || 10;
+    const newLimit = currentLimit + 10;
+    set((state) => {
+      const messageLoadingMore = new Set(state.messageLoadingMore);
+      messageLoadingMore.add(sessionID);
+      return { messageLoadingMore };
+    });
+    logger.info("store", `loadMoreMessages: fetching ${newLimit} messages`);
+    try {
+      const entries = await client.getSessionMessages(sessionID, newLimit);
+      const infoList = entries.map((e) => e.info);
+      set((state) => {
+        const messages = new Map(state.messages);
+        messages.set(sessionID, infoList);
+        const parts = new Map(state.parts);
+        entries.forEach((e) => {
+          const msgKey = `${sessionID}:${e.info.id}`;
+          const msgParts = new Map(parts.get(msgKey) || new Map());
+          e.parts.forEach((p) => msgParts.set(p.id, p));
+          parts.set(msgKey, msgParts);
+        });
+        const messageLimits = new Map(state.messageLimits);
+        messageLimits.set(sessionID, newLimit);
+        const messageHasMore = new Map(state.messageHasMore);
+        messageHasMore.set(sessionID, entries.length === newLimit);
+        const messageLoadingMore = new Set(state.messageLoadingMore);
+        messageLoadingMore.delete(sessionID);
+        return { messages, parts, messageLimits, messageHasMore, messageLoadingMore };
+      });
+      logger.info("store", `loadMoreMessages: loaded ${entries.length} messages (limit=${newLimit})`);
+    } catch (e: any) {
+      set((state) => {
+        const messageLoadingMore = new Set(state.messageLoadingMore);
+        messageLoadingMore.delete(sessionID);
+        return { messageLoadingMore };
+      });
+      logger.error("store", `loadMoreMessages failed for ${sessionID}`, { error: e.message });
     }
   },
 
@@ -317,7 +390,23 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
           break;
         }
-        case "message.part.delta":
+        case "message.part.delta": {
+          const { sessionID: sID, messageID: mID, partID: pID, field, delta } = properties;
+          if (sID && mID && pID && field === "text" && delta) {
+            set((state) => {
+              const parts = new Map(state.parts);
+              const msgKey = `${sID}:${mID}`;
+              const msgParts = new Map(parts.get(msgKey) || new Map());
+              const existing = msgParts.get(pID) as any;
+              if (existing && typeof existing.text === "string") {
+                msgParts.set(pID, { ...existing, text: existing.text + delta });
+                parts.set(msgKey, msgParts);
+              }
+              return { parts };
+            });
+          }
+          break;
+        }
         case "message.part.removed":
         case "message.removed":
         case "file.edited":

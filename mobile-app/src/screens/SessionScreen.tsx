@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,22 +9,31 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
 import { logger } from "../utils/logger";
 import { RootStackParamList } from "../App";
-import MessagePart from "../components/MessagePart";
+import MessageBubble from "../components/MessageBubble";
 import PermissionCard from "../components/PermissionCard";
 import QuestionCard from "../components/QuestionCard";
 import TodoList from "../components/TodoList";
+import type { Message } from "../types/opencode";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Session">;
 
 export default function SessionScreen({ route, navigation }: Props) {
   const { sessionID } = route.params;
+  const [inputText, setInputText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [nearBottom, setNearBottom] = useState(true);
+  const flatListRef = useRef<FlatList>(null);
+
   const {
     sessions,
     sessionStatuses,
@@ -34,15 +43,14 @@ export default function SessionScreen({ route, navigation }: Props) {
     questions,
     todos,
     fetchMessages,
+    loadMoreMessages,
     sendMessage,
     abortSession,
     replyPermission,
     replyQuestion,
+    messageLoadingMore,
+    messageHasMore,
   } = useAppStore();
-
-  const [inputText, setInputText] = useState("");
-  const [sending, setSending] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
 
   const session = sessions.get(sessionID);
   const sessionMessages = messages.get(sessionID) || [];
@@ -51,11 +59,15 @@ export default function SessionScreen({ route, navigation }: Props) {
   const sessionPermissions = permissions.filter((p) => p.sessionID === sessionID);
   const sessionQuestions = questions.filter((q) => q.sessionID === sessionID);
   const sessionTodos = todos.get(sessionID) || [];
+  const isLoadingMore = messageLoadingMore.has(sessionID);
+  const hasMore = messageHasMore.get(sessionID) !== false;
 
-  useEffect(() => {
-    logger.info("session", `SessionScreen mounted for ${sessionID}`, { title: session?.title });
-    fetchMessages(sessionID);
-  }, [sessionID]);
+  useFocusEffect(
+    useCallback(() => {
+      logger.info("session", `SessionScreen focused for ${sessionID}`, { title: session?.title });
+      fetchMessages(sessionID);
+    }, [sessionID])
+  );
 
   useEffect(() => {
     navigation.setOptions({
@@ -63,12 +75,30 @@ export default function SessionScreen({ route, navigation }: Props) {
     });
   }, [session?.title]);
 
+  const sortedMessages: Message[] = [...sessionMessages].sort(
+    (a, b) => a.time.created - b.time.created
+  );
+
   useEffect(() => {
-    logger.debug("session", `Messages updated: ${sessionMessages.length} messages, ${allParts.length} parts`);
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-  }, [sessionMessages.length]);
+    if (nearBottom && sortedMessages.length > 0) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+    }
+  }, [sortedMessages.length]);
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    const isNearBottom = distanceFromBottom < 100;
+    if (isNearBottom !== nearBottom) {
+      setNearBottom(isNearBottom);
+    }
+    if (contentOffset.y < 50 && hasMore && !isLoadingMore) {
+      logger.info("session", `Scroll near top, loading more messages`);
+      loadMoreMessages(sessionID);
+    }
+  };
 
   const handleSend = async () => {
     if (!inputText.trim() || sending) return;
@@ -76,6 +106,7 @@ export default function SessionScreen({ route, navigation }: Props) {
     logger.info("session", `Sending message to ${sessionID}`, { textLength: text.length });
     setInputText("");
     setSending(true);
+    setNearBottom(true);
     try {
       await sendMessage(sessionID, text);
       logger.info("session", "Message sent successfully");
@@ -93,31 +124,31 @@ export default function SessionScreen({ route, navigation }: Props) {
   };
 
   const handleReplyPermission = async (requestID: string, reply: "once" | "always" | "reject") => {
-    logger.info("session", `Replying to permission ${requestID}: ${reply}`);
     await replyPermission(requestID, reply);
   };
 
   const handleReplyQuestion = async (requestID: string, answers: string[][]) => {
-    logger.info("session", `Replying to question ${requestID}`);
     await replyQuestion(requestID, answers);
   };
 
-  const sortedMessages = [...sessionMessages].sort(
-    (a, b) => a.time.created - b.time.created
-  );
+  const renderItem = ({ item }: { item: Message }) => {
+    const msgParts = parts.get(`${sessionID}:${item.id}`);
+    const partList = msgParts ? Array.from(msgParts.values()) : [];
+    return <MessageBubble message={item} parts={partList} />;
+  };
 
-  const allParts: { messageID: string; role: string; part: any }[] = [];
-  for (const msg of sortedMessages) {
-    const msgParts = parts.get(`${sessionID}:${msg.id}`);
-    if (msgParts) {
-      for (const part of msgParts.values()) {
-        allParts.push({ messageID: msg.id, role: msg.role, part });
-      }
-    }
-  }
-
-  const renderItem = ({ item }: { item: { messageID: string; role: string; part: any } }) => (
-    <MessagePart messageID={item.messageID} role={item.role} part={item.part} />
+  const ListHeader = hasMore ? (
+    <View style={styles.loadMoreHeader}>
+      {isLoadingMore ? (
+        <ActivityIndicator size="small" color={Colors.dark.primary} />
+      ) : (
+        <Text style={styles.loadMoreText}>↑ Scroll up for older messages</Text>
+      )}
+    </View>
+  ) : (
+    <View style={styles.noMoreHeader}>
+      <Text style={styles.noMoreText}>— Start of conversation —</Text>
+    </View>
   );
 
   return (
@@ -146,7 +177,7 @@ export default function SessionScreen({ route, navigation }: Props) {
         )}
 
         {sessionPermissions.length > 0 && (
-          <View style={styles.permissionsContainer}>
+          <View style={styles.alertsContainer}>
             {sessionPermissions.map((p) => (
               <PermissionCard key={p.id} request={p} onReply={handleReplyPermission} />
             ))}
@@ -154,7 +185,7 @@ export default function SessionScreen({ route, navigation }: Props) {
         )}
 
         {sessionQuestions.length > 0 && (
-          <View style={styles.questionsContainer}>
+          <View style={styles.alertsContainer}>
             {sessionQuestions.map((q) => (
               <QuestionCard key={q.id} request={q} onReply={handleReplyQuestion} />
             ))}
@@ -165,14 +196,19 @@ export default function SessionScreen({ route, navigation }: Props) {
 
         <FlatList
           ref={flatListRef}
-          data={allParts}
-          keyExtractor={(item) => item.part.id}
+          data={sortedMessages}
+          keyExtractor={(item) => item.id}
           renderItem={renderItem}
           style={styles.messageList}
           contentContainerStyle={styles.messageListContent}
-          onContentSizeChange={() =>
-            flatListRef.current?.scrollToEnd({ animated: false })
-          }
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          ListHeaderComponent={ListHeader}
+          onContentSizeChange={() => {
+            if (nearBottom) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
         />
 
         <View style={styles.inputContainer}>
@@ -238,10 +274,7 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     fontWeight: "600",
   },
-  permissionsContainer: {
-    paddingHorizontal: Spacing.md,
-  },
-  questionsContainer: {
+  alertsContainer: {
     paddingHorizontal: Spacing.md,
   },
   messageList: {
@@ -250,6 +283,23 @@ const styles = StyleSheet.create({
   messageListContent: {
     padding: Spacing.md,
     paddingBottom: Spacing.xl,
+  },
+  loadMoreHeader: {
+    paddingVertical: Spacing.md,
+    alignItems: "center",
+  },
+  loadMoreText: {
+    fontSize: FontSizes.xs,
+    color: Colors.dark.textMuted,
+  },
+  noMoreHeader: {
+    paddingVertical: Spacing.sm,
+    alignItems: "center",
+  },
+  noMoreText: {
+    fontSize: FontSizes.xs,
+    color: Colors.dark.textMuted,
+    fontStyle: "italic",
   },
   inputContainer: {
     flexDirection: "row",

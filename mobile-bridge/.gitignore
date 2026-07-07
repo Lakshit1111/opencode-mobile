@@ -1,3 +1,6 @@
 node_modules/
 config.json.bridge.log
 .bridge.err
+.bridge.log
+.oc-serve.log
+.oc-serve.err

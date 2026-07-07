@@ -250,7 +250,7 @@ class OpenCodeClient {
       model?: { providerID: string; modelID: string };
     }
   ): Promise<void> {
-    const url = `${this.baseUrl}/api/opencode/session/${sessionID}/message`;
+    const url = `${this.baseUrl}/api/opencode/session/${sessionID}/prompt_async`;
     const body = JSON.stringify({
       parts: [{ type: "text", text }],
       ...options,

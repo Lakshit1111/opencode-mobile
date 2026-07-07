@@ -472,7 +472,7 @@ async function startServer() {
       maxConnections: config.maxConnections,
     });
 
-    const isPostToSession = req.method === "POST" && targetPath.match(/^\/session\/[^/]+\/(prompt_async|message|abort)/);
+    const isPostToSession = req.method === "POST" && targetPath.match(/^\/session\/[^/]+\/(message|abort)/);
     if (isPostToSession) {
       for (const srv of discoveredServers) {
         const ocAuth = srv.password ? `${srv.username}:${srv.password}` : null;

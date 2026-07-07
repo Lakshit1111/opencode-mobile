@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback } from "react";
 import {
   View,
   Text,
@@ -6,21 +6,27 @@ import {
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
+import { Colors, Spacing, FontSizes } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
+import { logger } from "../utils/logger";
 import { RootStackParamList } from "../App";
-import SessionCard from "../components/SessionCard";
+import FolderCard from "../components/FolderCard";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Dashboard">;
+
+interface FolderInfo {
+  directory: string;
+  count: number;
+  lastUpdated: number;
+}
 
 export default function DashboardScreen({ navigation }: Props) {
   const {
     sessions,
-    sessionStatuses,
     permissions,
     questions,
     fetchSessions,
@@ -28,22 +34,39 @@ export default function DashboardScreen({ navigation }: Props) {
     connected,
   } = useAppStore();
 
-  const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    if (connected) {
-      fetchSessions();
-    }
-  }, [connected]);
+  useFocusEffect(
+    useCallback(() => {
+      if (connected) {
+        logger.info("dashboard", "Focus gained, fetching sessions");
+        fetchSessions();
+      }
+    }, [connected, fetchSessions])
+  );
 
   const onRefresh = async () => {
-    setRefreshing(true);
     await fetchSessions();
-    setRefreshing(false);
   };
 
-  const sessionList = Array.from(sessions.values()).sort(
-    (a, b) => b.time.updated - a.time.updated
+  const folderMap = new Map<string, FolderInfo>();
+  for (const s of sessions.values()) {
+    const dir = s.directory || "(no directory)";
+    const existing = folderMap.get(dir);
+    if (existing) {
+      existing.count += 1;
+      if (s.time.updated > existing.lastUpdated) {
+        existing.lastUpdated = s.time.updated;
+      }
+    } else {
+      folderMap.set(dir, {
+        directory: dir,
+        count: 1,
+        lastUpdated: s.time.updated,
+      });
+    }
+  }
+
+  const folderList = Array.from(folderMap.values()).sort(
+    (a, b) => b.lastUpdated - a.lastUpdated
   );
 
   const pendingCount = permissions.length + questions.length;
@@ -53,7 +76,7 @@ export default function DashboardScreen({ navigation }: Props) {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.statusDot} />
-          <Text style={styles.headerTitle}>Sessions</Text>
+          <Text style={styles.headerTitle}>Folders</Text>
         </View>
         <View style={styles.headerRight}>
           {pendingCount > 0 && (
@@ -87,27 +110,30 @@ export default function DashboardScreen({ navigation }: Props) {
       )}
 
       <FlatList
-        data={sessionList}
-        keyExtractor={(item) => item.id}
+        data={folderList}
+        keyExtractor={(item) => item.directory}
         renderItem={({ item }) => (
-          <SessionCard
-            session={item}
-            status={sessionStatuses.get(item.id)}
-            onPress={() => navigation.navigate("Session", { sessionID: item.id })}
+          <FolderCard
+            directory={item.directory}
+            count={item.count}
+            lastUpdated={item.lastUpdated}
+            onPress={() =>
+              navigation.navigate("FolderSessions", { directory: item.directory })
+            }
           />
         )}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.dark.primary} />
+          <RefreshControl refreshing={false} onRefresh={onRefresh} tintColor={Colors.dark.primary} />
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>No Sessions</Text>
+            <Text style={styles.emptyTitle}>No Folders</Text>
             <Text style={styles.emptyText}>
               Start a session in OpenCode on your laptop to see it here
             </Text>
           </View>
         }
-        contentContainerStyle={sessionList.length === 0 ? styles.emptyList : styles.list}
+        contentContainerStyle={folderList.length === 0 ? styles.emptyList : styles.list}
       />
     </SafeAreaView>
   );
@@ -149,7 +175,7 @@ const styles = StyleSheet.create({
   },
   badge: {
     backgroundColor: Colors.dark.error,
-    borderRadius: BorderRadii.full,
+    borderRadius: 999,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 2,
     marginRight: Spacing.md,
@@ -162,7 +188,7 @@ const styles = StyleSheet.create({
   logsBtn: {
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
-    borderRadius: BorderRadii.sm,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: Colors.dark.accent,
     marginRight: Spacing.sm,
@@ -174,7 +200,7 @@ const styles = StyleSheet.create({
   disconnectBtn: {
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
-    borderRadius: BorderRadii.sm,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: Colors.dark.error,
   },

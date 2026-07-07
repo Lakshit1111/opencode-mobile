@@ -216,3 +216,9 @@ export interface ConnectionConfig {
   bridgeUrl: string;
   apiKey: string;
 }
+
+export interface Project {
+  id: string;
+  worktree: string;
+  time?: { created: number; updated: number };
+}

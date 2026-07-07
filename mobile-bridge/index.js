@@ -30,6 +30,7 @@ function loadConfig() {
     opencodePassword: "",
     autoStartBridge: true,
     logLevel: "info",
+    autoDiscover: true,
   };
   if (fs.existsSync(CONFIG_PATH)) {
     try {
@@ -62,6 +63,95 @@ function ensureApiKey(cfg) {
   return cfg;
 }
 
+function basicAuthHeader(username, password) {
+  if (!password) return undefined;
+  const pair = `${username || "opencode"}:${password}`;
+  return "Basic " + Buffer.from(pair).toString("base64");
+}
+
+async function tryServer(url, authHeader) {
+  try {
+    const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
+    if (authHeader) headers["Authorization"] = authHeader;
+    const healthRes = await fetch(url + "/global/health", { headers, signal: AbortSignal.timeout(2000) });
+    if (!healthRes.ok) {
+      log("debug", "discovery", `tryServer health failed`, { url, status: healthRes.status, auth: !!authHeader });
+      return null;
+    }
+    const health = await healthRes.json();
+    if (!health.healthy) return null;
+    const sessRes = await fetch(url + "/session", { headers, signal: AbortSignal.timeout(2000) });
+    if (!sessRes.ok) return null;
+    const sessions = await sessRes.json();
+    return { url, sessionCount: Array.isArray(sessions) ? sessions.length : 0, version: health.version };
+  } catch (e) {
+    log("debug", "discovery", `tryServer error`, { url, error: e.message, auth: !!authHeader });
+    return null;
+  }
+}
+
+async function discoverOpenCodeServer(configuredUrl, configuredUser, configuredPass) {
+  log("info", "discovery", "Starting auto-discovery for OpenCode servers");
+  const candidates = new Set();
+  if (configuredUrl) candidates.add(configuredUrl.replace(/\/+$/, ""));
+
+  try {
+    const os = require("os");
+    const { execSync } = require("child_process");
+    const out = execSync('netstat -ano -p tcp', { encoding: 'utf8', timeout: 5000 });
+    const lines = out.split("\n").filter((l) => l.includes("LISTENING"));
+    const pidsByPort = new Map();
+    for (const line of lines) {
+      const m = line.trim().match(/^\S+\s+\S+?:(\d+)\s+\S+\s+LISTENING\s+(\d+)/);
+      if (m) pidsByPort.set(parseInt(m[1]), parseInt(m[2]));
+    }
+    const procOut = execSync('tasklist /fo csv /nh', { encoding: 'utf8', timeout: 5000 });
+    const opencodePids = new Set();
+    for (const line of procOut.split("\n")) {
+      if (/opencode/i.test(line)) {
+        const parts = line.match(/"([^"]+)"/g);
+        if (parts && parts[1]) opencodePids.add(parseInt(parts[1].replace(/"/g, "")));
+      }
+    }
+    for (const [port, pid] of pidsByPort) {
+      if (opencodePids.has(pid) && port > 1024) {
+        candidates.add(`http://127.0.0.1:${port}`);
+      }
+    }
+    log("info", "discovery", `Found ${candidates.size} candidate URLs`, { candidates: Array.from(candidates) });
+  } catch (e) {
+    log("warn", "discovery", "Port scan failed", { error: e.message });
+  }
+
+  const envPassword = process.env.OPENCODE_SERVER_PASSWORD;
+  const envUser = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+  const authHeaders = new Set();
+  authHeaders.add(undefined);
+  if (configuredPass) authHeaders.add(basicAuthHeader(configuredUser, configuredPass));
+  if (envPassword) authHeaders.add(basicAuthHeader(envUser, envPassword));
+
+  let best = null;
+  for (const url of candidates) {
+    const noAuthResult = await tryServer(url, undefined);
+    let authResult = null;
+    for (const auth of authHeaders) {
+      if (auth === undefined) continue;
+      const r = await tryServer(url, auth);
+      if (r) { authResult = { ...r, authHeader: auth }; break; }
+    }
+    const result = authResult || noAuthResult;
+    if (result) {
+      const requiresAuth = !noAuthResult && !!authResult;
+      const score = result.sessionCount + (requiresAuth ? 10000 : 0);
+      log("debug", "discovery", `Candidate scored`, { url, sessions: result.sessionCount, requiresAuth, score });
+      if (!best || score > best.score) {
+        best = { ...result, score, username: requiresAuth ? envUser || configuredUser : "", password: requiresAuth ? (envPassword || configuredPass || "") : "" };
+      }
+    }
+  }
+  return best;
+}
+
 async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
   const proxyStart = Date.now();
   try {
@@ -71,6 +161,9 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     const timeout = setTimeout(() => controller.abort(), 30000);
 
     const headers = { ...req.headers, host: undefined };
+    delete headers["content-length"];
+    delete headers["transfer-encoding"];
+    delete headers["expect"];
     if (opencodeAuth) {
       headers["authorization"] = "Basic " + Buffer.from(opencodeAuth).toString("base64");
     }
@@ -83,9 +176,17 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     };
 
     if (req.method !== "GET" && req.method !== "HEAD") {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      fetchOptions.body = Buffer.concat(chunks);
+      let bodyBuffer;
+      if (req.body !== undefined && Object.keys(req.body).length > 0) {
+        bodyBuffer = Buffer.from(JSON.stringify(req.body));
+      } else {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        bodyBuffer = Buffer.concat(chunks);
+      }
+      if (bodyBuffer.length > 0) {
+        fetchOptions.body = bodyBuffer;
+      }
       if (!fetchOptions.headers["content-type"]) {
         fetchOptions.headers["content-type"] = "application/json";
       }
@@ -142,9 +243,9 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     res.end(bodyBuffer);
     return null;
   } catch (err) {
-    log("error", "proxy", `${req.method} ${targetPath} failed (${Date.now() - proxyStart}ms)`, { error: err.message });
+    log("error", "proxy", `${req.method} ${targetPath} failed (${Date.now() - proxyStart}ms)`, { error: err.message, cause: err.cause?.message, code: err.cause?.code });
     if (!res.headersSent) {
-      res.status(502).json({ error: "Failed to reach OpenCode server", details: err.message });
+      res.status(502).json({ error: "Failed to reach OpenCode server", details: err.message, cause: err.cause?.message });
     }
     return null;
   }
@@ -155,6 +256,19 @@ async function startServer() {
   config = ensureApiKey(config);
   global.__BRIDGE_CFG__ = config;
   log("info", "bridge", "Config loaded", { bridgePort: config.bridgePort, opencodeBaseUrl: config.opencodeBaseUrl, logLevel: config.logLevel });
+
+  if (config.autoDiscover) {
+    const discovered = await discoverOpenCodeServer(config.opencodeBaseUrl, config.opencodeUsername, config.opencodePassword);
+    if (discovered) {
+      config.opencodeBaseUrl = discovered.url;
+      config.opencodeUsername = discovered.username || "";
+      config.opencodePassword = discovered.password || "";
+      global.__BRIDGE_CFG__ = config;
+      log("info", "bridge", `Auto-discovered OpenCode server`, { url: discovered.url, sessions: discovered.sessionCount });
+    } else {
+      log("warn", "bridge", "Auto-discover failed, using configured URL", { url: config.opencodeBaseUrl });
+    }
+  }
 
   const app = express();
   app.use(cors());
@@ -275,7 +389,7 @@ async function startServer() {
   });
 
   app.put("/api/config", authenticate, (req, res) => {
-    const allowed = ["allowedIPs", "maxConnections", "opencodeBaseUrl", "logLevel"];
+    const allowed = ["allowedIPs", "maxConnections", "opencodeBaseUrl", "logLevel", "autoDiscover"];
     allowed.forEach((key) => {
       if (req.body[key] !== undefined) {
         config[key] = req.body[key];
@@ -287,7 +401,9 @@ async function startServer() {
 
   app.all("/api/opencode/*", authenticate, checkIP, checkBridgeEnabled, async (req, res) => {
     const targetPath = "/" + req.params[0];
-    log("info", "http", `ENTER /api/opencode${targetPath}`, {
+    const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+    const targetWithPathQuery = targetPath + query;
+    log("info", "http", `ENTER /api/opencode${targetWithPathQuery}`, {
       method: req.method,
       ip: req.ip,
       auth: req.headers["authorization"] ? "yes" : "no",
@@ -296,7 +412,7 @@ async function startServer() {
       maxConnections: config.maxConnections,
     });
     const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
-    await proxyRequest(req, res, config.opencodeBaseUrl, targetPath, ocAuth);
+    await proxyRequest(req, res, config.opencodeBaseUrl, targetWithPathQuery, ocAuth);
   });
 
   app.get("/api/test/proxy", authenticate, async (req, res) => {
@@ -408,65 +524,6 @@ async function startServer() {
       controller.abort();
       state.connectedClients.delete(clientId);
       log("info", "sse", `Client disconnected: ${clientId} (total: ${state.connectedClients.size})`);
-    });
-  });
-
-  app.get("/api/sync-events", authenticate, checkIP, checkBridgeEnabled, (req, res) => {
-    const clientId = crypto.randomBytes(8).toString("hex");
-    log("info", "sse-sync", `Client connected: ${clientId} from ${req.ip}`);
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    res.write(`event: connected\ndata: ${JSON.stringify({ clientId })}\n\n`);
-
-    const controller = new AbortController();
-    const ocSyncHeaders = config.opencodePassword
-      ? { Accept: "text/event-stream", "Accept-Encoding": "identity", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
-      : { Accept: "text/event-stream", "Accept-Encoding": "identity" };
-
-    (async () => {
-      try {
-        const eventUrl = new URL("/global/sync-event", config.opencodeBaseUrl);
-        const response = await fetch(eventUrl.toString(), {
-          headers: ocSyncHeaders,
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          res.write(`event: error\ndata: ${JSON.stringify({ message: "Failed to connect to OpenCode sync stream" })}\n\n`);
-          return;
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            res.write(line + "\n");
-          }
-        }
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
-        }
-      }
-    })();
-
-    req.on("close", () => {
-      controller.abort();
-      log("info", "sse-sync", `Client disconnected: ${clientId}`);
     });
   });
 

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo } from "../types/opencode";
+import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project } from "../types/opencode";
 import { logger } from "../utils/logger";
 
 const CONNECTION_KEY = "@opencode_connection";
@@ -112,7 +112,9 @@ class OpenCodeClient {
         throw new Error(`API Error ${res.status}: ${text}`);
       }
       logger.debug("client", `${method} ${path} OK (${res.status}) in ${elapsed}ms`);
-      return res.json();
+      const text = await res.text();
+      if (res.status === 204 || !text) return undefined as T;
+      return JSON.parse(text) as T;
     } catch (e: any) {
       const elapsed = Date.now() - startTime;
       if (e.message?.startsWith("API Error")) throw e;
@@ -188,8 +190,14 @@ class OpenCodeClient {
   async listSessions(directory?: string): Promise<Session[]> {
     const query = directory ? `?directory=${encodeURIComponent(directory)}` : "";
     const sessions = await this.request<Session[]>(`/session${query}`);
-    logger.info("client", `Loaded ${sessions.length} sessions`);
+    logger.info("client", `Loaded ${sessions.length} sessions`, { directory });
     return sessions;
+  }
+
+  async listProjects(): Promise<Project[]> {
+    const projects = await this.request<Project[]>("/project");
+    logger.info("client", `Loaded ${projects.length} projects`);
+    return projects;
   }
 
   async getSession(sessionID: string): Promise<Session> {
@@ -206,9 +214,11 @@ class OpenCodeClient {
   async getSessionMessages(
     sessionID: string,
     limit?: number
-  ): Promise<Message[]> {
+  ): Promise<{ info: Message; parts: Part[] }[]> {
     const query = limit ? `?limit=${limit}` : "";
-    const msgs = await this.request<Message[]>(`/session/${sessionID}/messages${query}`);
+    const msgs = await this.request<{ info: Message; parts: Part[] }[]>(
+      `/session/${sessionID}/message${query}`
+    );
     logger.info("client", `Loaded ${msgs.length} messages for session ${sessionID}`);
     return msgs;
   }
@@ -227,9 +237,9 @@ class OpenCodeClient {
       agent?: string;
       model?: { providerID: string; modelID: string };
     }
-  ): Promise<Message> {
+  ): Promise<void> {
     logger.info("client", `Sending prompt to ${sessionID}`, { textLength: text.length });
-    return this.request<Message>(`/session/${sessionID}/prompt`, {
+    await this.request<void>(`/session/${sessionID}/prompt_async`, {
       method: "POST",
       body: JSON.stringify({
         parts: [{ type: "text", text }],
@@ -286,10 +296,6 @@ class OpenCodeClient {
 
   getEventStreamUrl(): string {
     return `${this.baseUrl}/api/events?token=${encodeURIComponent(this.apiKey)}`;
-  }
-
-  getSyncEventStreamUrl(): string {
-    return `${this.baseUrl}/api/sync-events?token=${encodeURIComponent(this.apiKey)}`;
   }
 }
 

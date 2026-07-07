@@ -8,11 +8,13 @@ import { logger } from "./utils/logger";
 import ConnectScreen from "./screens/ConnectScreen";
 import DashboardScreen from "./screens/DashboardScreen";
 import SessionScreen from "./screens/SessionScreen";
+import FolderSessionsScreen from "./screens/FolderSessionsScreen";
 import LogsScreen from "./screens/LogsScreen";
 
 export type RootStackParamList = {
   Connect: undefined;
   Dashboard: undefined;
+  FolderSessions: { directory: string };
   Session: { sessionID: string };
   Logs: undefined;
 };
@@ -64,6 +66,11 @@ export default function App() {
                 name="Dashboard"
                 component={DashboardScreen}
                 options={{ title: "OpenCode", headerBackVisible: false }}
+              />
+              <Stack.Screen
+                name="FolderSessions"
+                component={FolderSessionsScreen}
+                options={{ title: "Folder", headerBackTitle: "Back" }}
               />
               <Stack.Screen
                 name="Session"

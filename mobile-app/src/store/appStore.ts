@@ -116,19 +116,45 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchSessions: async () => {
     logger.info("store", "fetchSessions called");
     try {
-      const sessions = await client.listSessions();
-      const sessionMap = new Map<string, Session>();
-      sessions.forEach((s) => sessionMap.set(s.id, s));
-      set({ sessions: sessionMap });
-      logger.info("store", `fetchSessions: loaded ${sessions.length} sessions`);
+      const projects = await client.listProjects();
+      const directories = projects.map((p) => p.worktree).filter((d) => d && d !== "/");
+      logger.info("store", `fetchSessions: querying ${directories.length} directories`);
 
-      const statuses = await client.getSessionStatus();
-      const statusMap = new Map<string, SessionStatus>();
-      Object.entries(statuses).forEach(([id, status]) => {
-        statusMap.set(id, status as SessionStatus);
+      const results = await Promise.all(
+        directories.map(async (dir) => {
+          try {
+            return await client.listSessions(dir);
+          } catch (e: any) {
+            logger.warn("store", `fetchSessions: directory ${dir} failed`, { error: e.message });
+            return [] as Session[];
+          }
+        })
+      );
+
+      const sessionMap = new Map<string, Session>();
+      let total = 0;
+      results.forEach((sessions) => {
+        sessions.forEach((s) => {
+          if (!sessionMap.has(s.id)) {
+            sessionMap.set(s.id, s);
+            total++;
+          }
+        });
       });
-      set({ sessionStatuses: statusMap });
-      logger.info("store", `fetchSessions: loaded ${statusMap.size} statuses`);
+      set({ sessions: sessionMap });
+      logger.info("store", `fetchSessions: loaded ${total} unique sessions across ${directories.length} directories`);
+
+      try {
+        const statuses = await client.getSessionStatus();
+        const statusMap = new Map<string, SessionStatus>();
+        Object.entries(statuses).forEach(([id, status]) => {
+          statusMap.set(id, status as SessionStatus);
+        });
+        set({ sessionStatuses: statusMap });
+        logger.info("store", `fetchSessions: loaded ${statusMap.size} statuses`);
+      } catch (e: any) {
+        logger.warn("store", `fetchSessions: status fetch failed`, { error: e.message });
+      }
     } catch (e: any) {
       logger.error("store", "fetchSessions failed", { error: e.message });
     }
@@ -137,13 +163,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchMessages: async (sessionID: string) => {
     logger.info("store", `fetchMessages called for ${sessionID}`);
     try {
-      const msgs = await client.getSessionMessages(sessionID);
+      const entries = await client.getSessionMessages(sessionID);
       set((state) => {
         const messages = new Map(state.messages);
-        messages.set(sessionID, msgs);
-        return { messages };
+        messages.set(sessionID, entries.map((e) => e.info));
+        const parts = new Map(state.parts);
+        entries.forEach((e) => {
+          const msgKey = `${sessionID}:${e.info.id}`;
+          const msgParts = new Map(parts.get(msgKey) || new Map());
+          e.parts.forEach((p) => msgParts.set(p.id, p));
+          parts.set(msgKey, msgParts);
+        });
+        return { messages, parts };
       });
-      logger.info("store", `fetchMessages: loaded ${msgs.length} messages`);
+      logger.info("store", `fetchMessages: loaded ${entries.length} messages`);
     } catch (e: any) {
       logger.error("store", `fetchMessages failed for ${sessionID}`, { error: e.message });
     }

@@ -9,8 +9,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -31,7 +29,6 @@ export default function SessionScreen({ route, navigation }: Props) {
   const { sessionID } = route.params;
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
-  const [nearBottom, setNearBottom] = useState(true);
   const flatListRef = useRef<FlatList>(null);
 
   const {
@@ -79,23 +76,11 @@ export default function SessionScreen({ route, navigation }: Props) {
     (a, b) => a.time.created - b.time.created
   );
 
-  useEffect(() => {
-    if (nearBottom && sortedMessages.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 50);
-    }
-  }, [sortedMessages.length]);
+  const reversedMessages: Message[] = [...sortedMessages].reverse();
 
-  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
-    const isNearBottom = distanceFromBottom < 100;
-    if (isNearBottom !== nearBottom) {
-      setNearBottom(isNearBottom);
-    }
-    if (contentOffset.y < 50 && hasMore && !isLoadingMore) {
-      logger.info("session", `Scroll near top, loading more messages`);
+  const handleEndReached = () => {
+    if (hasMore && !isLoadingMore && reversedMessages.length > 0) {
+      logger.info("session", `Reached end (oldest), loading more messages`);
       loadMoreMessages(sessionID);
     }
   };
@@ -106,7 +91,6 @@ export default function SessionScreen({ route, navigation }: Props) {
     logger.info("session", `Sending message to ${sessionID}`, { textLength: text.length });
     setInputText("");
     setSending(true);
-    setNearBottom(true);
     try {
       await sendMessage(sessionID, text);
       logger.info("session", "Message sent successfully");
@@ -137,16 +121,16 @@ export default function SessionScreen({ route, navigation }: Props) {
     return <MessageBubble message={item} parts={partList} />;
   };
 
-  const ListHeader = hasMore ? (
-    <View style={styles.loadMoreHeader}>
+  const ListFooter = hasMore ? (
+    <View style={styles.loadMoreFooter}>
       {isLoadingMore ? (
         <ActivityIndicator size="small" color={Colors.dark.primary} />
       ) : (
-        <Text style={styles.loadMoreText}>↑ Scroll up for older messages</Text>
+        <Text style={styles.loadMoreText}>↑ Load older messages</Text>
       )}
     </View>
   ) : (
-    <View style={styles.noMoreHeader}>
+    <View style={styles.noMoreFooter}>
       <Text style={styles.noMoreText}>— Start of conversation —</Text>
     </View>
   );
@@ -196,19 +180,15 @@ export default function SessionScreen({ route, navigation }: Props) {
 
         <FlatList
           ref={flatListRef}
-          data={sortedMessages}
+          data={reversedMessages}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           style={styles.messageList}
           contentContainerStyle={styles.messageListContent}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          ListHeaderComponent={ListHeader}
-          onContentSizeChange={() => {
-            if (nearBottom) {
-              flatListRef.current?.scrollToEnd({ animated: false });
-            }
-          }}
+          inverted
+          onEndReached={handleEndReached}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={ListFooter}
         />
 
         <View style={styles.inputContainer}>
@@ -284,7 +264,7 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     paddingBottom: Spacing.xl,
   },
-  loadMoreHeader: {
+  loadMoreFooter: {
     paddingVertical: Spacing.md,
     alignItems: "center",
   },
@@ -292,7 +272,7 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.xs,
     color: Colors.dark.textMuted,
   },
-  noMoreHeader: {
+  noMoreFooter: {
     paddingVertical: Spacing.sm,
     alignItems: "center",
   },

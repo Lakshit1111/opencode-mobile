@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useState } from "react";
 import {
   View,
   Text,
@@ -6,11 +6,12 @@ import {
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { Colors, Spacing, FontSizes } from "../constants/theme";
+import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
 import { logger } from "../utils/logger";
 import { RootStackParamList } from "../App";
@@ -25,11 +26,14 @@ interface FolderInfo {
 }
 
 export default function DashboardScreen({ navigation }: Props) {
+  const [creating, setCreating] = useState(false);
   const {
     sessions,
     permissions,
     questions,
     fetchSessions,
+    createSession,
+    fetchMessages,
     disconnect,
     connected,
   } = useAppStore();
@@ -45,6 +49,23 @@ export default function DashboardScreen({ navigation }: Props) {
 
   const onRefresh = async () => {
     await fetchSessions();
+  };
+
+  const handleNewSession = async () => {
+    if (creating) return;
+    setCreating(true);
+    logger.info("dashboard", `Creating new session`);
+    try {
+      const session = await createSession("New session");
+      if (session) {
+        await fetchMessages(session.id);
+        navigation.navigate("Session", { sessionID: session.id });
+      }
+    } catch (e: any) {
+      logger.error("dashboard", "Failed to create session", { error: e.message });
+    } finally {
+      setCreating(false);
+    }
   };
 
   const folderMap = new Map<string, FolderInfo>();
@@ -84,6 +105,17 @@ export default function DashboardScreen({ navigation }: Props) {
               <Text style={styles.badgeText}>{pendingCount}</Text>
             </View>
           )}
+          <TouchableOpacity
+            style={[styles.newBtn, creating && styles.newBtnDisabled]}
+            onPress={handleNewSession}
+            disabled={creating}
+          >
+            {creating ? (
+              <ActivityIndicator size="small" color={Colors.dark.primary} />
+            ) : (
+              <Text style={styles.newBtnText}>+ New</Text>
+            )}
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation.navigate("Logs")} style={styles.logsBtn}>
             <Text style={styles.logsText}>Logs</Text>
           </TouchableOpacity>
@@ -192,6 +224,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.dark.accent,
     marginRight: Spacing.sm,
+  },
+  newBtn: {
+    backgroundColor: Colors.dark.primary,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadii.sm,
+    marginRight: Spacing.sm,
+  },
+  newBtnDisabled: {
+    opacity: 0.5,
+  },
+  newBtnText: {
+    color: "#fff",
+    fontSize: FontSizes.sm,
+    fontWeight: "600",
   },
   logsText: {
     color: Colors.dark.accent,

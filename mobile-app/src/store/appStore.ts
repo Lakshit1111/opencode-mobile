@@ -228,7 +228,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const infoList = entries.map((e) => e.info);
       set((state) => {
         const messages = new Map(state.messages);
-        messages.set(sessionID, infoList);
+        const existingMsgs = messages.get(sessionID) || [];
+        const existingIds = new Set(existingMsgs.map((m) => m.id));
+        const newMsgs = infoList.filter((m) => !existingIds.has(m.id));
+        messages.set(sessionID, [...newMsgs, ...existingMsgs]);
         const parts = new Map(state.parts);
         entries.forEach((e) => {
           const msgKey = `${sessionID}:${e.info.id}`;
@@ -244,7 +247,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         messageLoadingMore.delete(sessionID);
         return { messages, parts, messageLimits, messageHasMore, messageLoadingMore };
       });
-      logger.info("store", `loadMoreMessages: loaded ${entries.length} messages (limit=${newLimit})`);
+      logger.info("store", `loadMoreMessages: prepended ${infoList.length - (get().messages.get(sessionID)?.length || 0)} new older messages (limit=${newLimit})`);
     } catch (e: any) {
       set((state) => {
         const messageLoadingMore = new Set(state.messageLoadingMore);
@@ -260,6 +263,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await client.sendPrompt(sessionID, text);
       logger.info("store", "sendMessage success");
+      setTimeout(() => {
+        logger.debug("store", `sendMessage safety-net fetch for ${sessionID}`);
+        set((state) => {
+          const lastFetchTime = new Map(state.lastFetchTime);
+          lastFetchTime.set(sessionID, 0);
+          return { lastFetchTime };
+        });
+        get().fetchMessages(sessionID);
+      }, 1500);
     } catch (e: any) {
       logger.error("store", `sendMessage failed`, { error: e.message });
       throw e;
@@ -400,8 +412,10 @@ export const useAppStore = create<AppState>((set, get) => ({
               const existing = msgParts.get(pID) as any;
               if (existing && typeof existing.text === "string") {
                 msgParts.set(pID, { ...existing, text: existing.text + delta });
-                parts.set(msgKey, msgParts);
+              } else {
+                msgParts.set(pID, { id: pID, sessionID: sID, messageID: mID, type: "text", text: delta });
               }
+              parts.set(msgKey, msgParts);
               return { parts };
             });
           }

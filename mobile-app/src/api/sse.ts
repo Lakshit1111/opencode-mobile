@@ -1,3 +1,4 @@
+import EventSource from "react-native-sse";
 import type { Event } from "../types/opencode";
 import { logger } from "../utils/logger";
 
@@ -30,14 +31,18 @@ class SSEManager {
     logger.info("sse", `Connecting (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`, { url: this.url });
 
     try {
-      this.eventSource = new EventSource(this.url);
+      this.eventSource = new EventSource(this.url, {
+        headers: { Accept: "text/event-stream" },
+        pollingInterval: 0,
+        withCredentials: false,
+      });
 
-      this.eventSource.onopen = () => {
+      this.eventSource.addEventListener("open", () => {
         logger.info("sse", "Connection opened");
         this.reconnectAttempts = 0;
-      };
+      });
 
-      this.eventSource.onmessage = (msg) => {
+      this.eventSource.addEventListener("message", (msg: any) => {
         try {
           const event: Event = JSON.parse(msg.data);
           this.eventCount++;
@@ -47,20 +52,23 @@ class SSEManager {
           this.emit(event.type, event);
           this.emit("*", event);
         } catch (e: any) {
-          logger.warn("sse", "Failed to parse SSE message", { data: msg.data?.substring(0, 200), error: e.message });
+          logger.warn("sse", "Failed to parse SSE message", { data: msg.data?.substring?.(0, 200), error: e.message });
         }
-      };
+      });
 
-      this.eventSource.onerror = (e: any) => {
-        const readyState = this.eventSource?.readyState;
-        logger.error("sse", `Connection error (readyState=${readyState})`, { attempt: this.reconnectAttempts + 1 });
+      this.eventSource.addEventListener("error", (e: any) => {
+        logger.error("sse", `Connection error`, { attempt: this.reconnectAttempts + 1, error: e?.message || "unknown" });
         this.eventSource?.close();
         this.eventSource = null;
         this.reconnectAttempts++;
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         logger.info("sse", `Reconnecting in ${delay}ms`);
         this.reconnectTimer = setTimeout(() => this._connect(), delay);
-      };
+      });
+
+      this.eventSource.addEventListener("close", () => {
+        logger.info("sse", "Connection closed by server");
+      });
     } catch (e: any) {
       logger.error("sse", "Failed to create EventSource", { error: e.message, url: this.url });
     }
@@ -102,7 +110,7 @@ class SSEManager {
   }
 
   get connected(): boolean {
-    return this.eventSource?.readyState === EventSource.OPEN;
+    return this.eventSource !== null;
   }
 }
 

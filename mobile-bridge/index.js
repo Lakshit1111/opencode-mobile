@@ -96,9 +96,12 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
 
     res.status(response.status);
     response.headers.forEach((val, key) => {
+      const lk = key.toLowerCase();
       if (
-        key.toLowerCase() !== "transfer-encoding" &&
-        key.toLowerCase() !== "connection"
+        lk !== "transfer-encoding" &&
+        lk !== "connection" &&
+        lk !== "content-encoding" &&
+        lk !== "content-length"
       ) {
         res.setHeader(key, val);
       }

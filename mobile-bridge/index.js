@@ -138,7 +138,8 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
         log("error", "proxy", "Failed to decompress brotli", { error: e.message });
       }
     }
-    res.send(bodyBuffer);
+    res.setHeader("Content-Length", bodyBuffer.length);
+    res.end(bodyBuffer);
     return null;
   } catch (err) {
     log("error", "proxy", `${req.method} ${targetPath} failed (${Date.now() - proxyStart}ms)`, { error: err.message });
@@ -285,6 +286,54 @@ async function startServer() {
     const targetPath = "/" + req.params[0];
     const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
     await proxyRequest(req, res, config.opencodeBaseUrl, targetPath, ocAuth);
+  });
+
+  app.get("/api/test/proxy", authenticate, async (req, res) => {
+    try {
+      const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
+      const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
+      if (ocAuth) {
+        headers["Authorization"] = "Basic " + Buffer.from(ocAuth).toString("base64");
+      }
+      const r = await fetch(new URL("/global/health", config.opencodeBaseUrl), { headers });
+      const data = await r.text();
+      log("info", "test", "Proxy test", { status: r.status, bodyLen: data.length, body: data.substring(0, 200) });
+      res.json({
+        bridgeStatus: "ok",
+        opencodeStatus: r.status,
+        opencodeBody: data,
+        contentEncoding: r.headers.get("content-encoding"),
+        contentType: r.headers.get("content-type"),
+        allHeaders: Object.fromEntries(r.headers.entries()),
+      });
+    } catch (e) {
+      log("error", "test", "Proxy test failed", { error: e.message });
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/test/session-small", authenticate, async (req, res) => {
+    try {
+      const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
+      const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
+      if (ocAuth) {
+        headers["Authorization"] = "Basic " + Buffer.from(ocAuth).toString("base64");
+      }
+      const r = await fetch(new URL("/session?limit=1", config.opencodeBaseUrl), { headers });
+      const data = await r.text();
+      log("info", "test", "Session small test", {
+        status: r.status,
+        bodyLen: data.length,
+        contentEncoding: r.headers.get("content-encoding"),
+        contentType: r.headers.get("content-type"),
+        bodyPreview: data.substring(0, 300),
+      });
+      res.setHeader("Content-Type", "application/json");
+      res.send(data);
+    } catch (e) {
+      log("error", "test", "Session small test failed", { error: e.message });
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/events", authenticate, checkIP, checkBridgeEnabled, (req, res) => {

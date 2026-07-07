@@ -73,6 +73,7 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
     if (opencodeAuth) {
       headers["authorization"] = "Basic " + Buffer.from(opencodeAuth).toString("base64");
     }
+    headers["accept-encoding"] = "identity";
 
     const fetchOptions = {
       method: req.method,
@@ -196,7 +197,7 @@ async function startServer() {
     let ocHealthy = false;
     let ocVersion = undefined;
     try {
-      const ocHeaders = { Accept: "application/json" };
+      const ocHeaders = { Accept: "application/json", "Accept-Encoding": "identity" };
       if (config.opencodePassword) {
         ocHeaders["Authorization"] = "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64");
       }
@@ -278,8 +279,8 @@ async function startServer() {
 
     const controller = new AbortController();
     const ocAuthHeaders = config.opencodePassword
-      ? { Accept: "text/event-stream", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
-      : { Accept: "text/event-stream" };
+      ? { Accept: "text/event-stream", "Accept-Encoding": "identity", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
+      : { Accept: "text/event-stream", "Accept-Encoding": "identity" };
 
     (async () => {
       try {
@@ -338,8 +339,8 @@ async function startServer() {
 
     const controller = new AbortController();
     const ocSyncHeaders = config.opencodePassword
-      ? { Accept: "text/event-stream", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
-      : { Accept: "text/event-stream" };
+      ? { Accept: "text/event-stream", "Accept-Encoding": "identity", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
+      : { Accept: "text/event-stream", "Accept-Encoding": "identity" };
 
     (async () => {
       try {

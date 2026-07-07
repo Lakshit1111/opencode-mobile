@@ -207,13 +207,16 @@ async function startServer() {
   }
 
   function checkConnectionLimit(req, res, next) {
+    log("debug", "connlimit", `current=${state.connectedClients.size} max=${config.maxConnections}`);
     if (state.connectedClients.size >= config.maxConnections) {
+      log("warn", "connlimit", "REJECTED - limit reached");
       return res.status(429).json({ error: "Maximum connections reached" });
     }
     next();
   }
 
   function checkBridgeEnabled(req, res, next) {
+    log("debug", "bridge", `enabled=${state.bridgeEnabled}`);
     if (!state.bridgeEnabled) {
       return res.status(503).json({ error: "Mobile bridge is currently disabled. Toggle it ON from the control panel." });
     }
@@ -282,8 +285,16 @@ async function startServer() {
     res.json(config);
   });
 
-  app.all("/api/opencode/*", authenticate, checkIP, checkBridgeEnabled, checkConnectionLimit, async (req, res) => {
+  app.all("/api/opencode/*", authenticate, checkIP, checkBridgeEnabled, async (req, res) => {
     const targetPath = "/" + req.params[0];
+    log("info", "http", `ENTER /api/opencode${targetPath}`, {
+      method: req.method,
+      ip: req.ip,
+      auth: req.headers["authorization"] ? "yes" : "no",
+      bridgeEnabled: state.bridgeEnabled,
+      connectedClients: state.connectedClients.size,
+      maxConnections: config.maxConnections,
+    });
     const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
     await proxyRequest(req, res, config.opencodeBaseUrl, targetPath, ocAuth);
   });

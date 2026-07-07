@@ -54,21 +54,63 @@ class OpenCodeClient {
     const startTime = Date.now();
 
     try {
-      const res = await fetch(url, {
-        ...options,
-        headers: {
-          ...this.headers(),
-          ...(options?.headers || {}),
-        },
+      const res = await new Promise<Response>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open(method, url, true);
+        xhr.setRequestHeader("Authorization", `Bearer ${this.apiKey}`);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.timeout = 30000;
+        xhr.ontimeout = () => reject(new Error("Request timed out"));
+        xhr.onerror = (e) => {
+          logger.error("client", `XHR onerror for ${method} ${path}`, {
+            status: xhr.status,
+            statusText: xhr.statusText,
+            responseLen: xhr.responseText?.length,
+            responsePreview: xhr.responseText?.substring(0, 200),
+          });
+          reject(new Error(`Network request failed (status=${xhr.status})`));
+        };
+        xhr.onload = () => {
+          const elapsed = Date.now() - startTime;
+          logger.debug("client", `XHR onload for ${method} ${path}`, {
+            status: xhr.status,
+            elapsed,
+            responseLen: xhr.responseText?.length,
+          });
+          const responseHeaders: Record<string, string> = {};
+          const headerLines = xhr.getAllResponseHeaders().split("\r\n");
+          for (const line of headerLines) {
+            const idx = line.indexOf(":");
+            if (idx > 0) {
+              responseHeaders[line.substring(0, idx).trim().toLowerCase()] = line.substring(idx + 1).trim();
+            }
+          }
+          const body = xhr.responseText;
+          resolve({
+            ok: xhr.status >= 200 && xhr.status < 300,
+            status: xhr.status,
+            statusText: xhr.statusText,
+            headers: {
+              get: (name: string) => responseHeaders[name.toLowerCase()] || null,
+              forEach: (cb: (val: string, key: string) => void) => {
+                Object.entries(responseHeaders).forEach(([k, v]) => cb(v, k));
+              },
+            },
+            text: async () => body,
+            json: async () => JSON.parse(body),
+            arrayBuffer: async () => new ArrayBuffer(0),
+            blob: async () => new Blob(),
+          } as Response);
+        };
+        xhr.send(options?.body as string | undefined);
       });
-      const elapsed = Date.now() - startTime;
 
+      const elapsed = Date.now() - startTime;
       if (!res.ok) {
         const text = await res.text();
         logger.error("client", `${method} ${path} failed (${res.status}) in ${elapsed}ms`, { status: res.status, body: text });
         throw new Error(`API Error ${res.status}: ${text}`);
       }
-
       logger.debug("client", `${method} ${path} OK (${res.status}) in ${elapsed}ms`);
       return res.json();
     } catch (e: any) {

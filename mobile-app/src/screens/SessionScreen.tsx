@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
 import { useAppStore } from "../store/appStore";
+import { useShallow } from "zustand/react/shallow";
 import { logger } from "../utils/logger";
 import { RootStackParamList } from "../App";
 import MessageBubble from "../components/MessageBubble";
@@ -22,9 +23,13 @@ import PermissionCard from "../components/PermissionCard";
 import QuestionCard from "../components/QuestionCard";
 import TodoList from "../components/TodoList";
 import ModelAgentSelector from "../components/ModelAgentSelector";
-import type { Message } from "../types/opencode";
+import type { Message, Part } from "../types/opencode";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Session">;
+
+const EMPTY_ARRAY: Message[] = [];
+const EMPTY_TODOS: any[] = [];
+const EMPTY_PARTS: Part[] = [];
 
 export default function SessionScreen({ route, navigation }: Props) {
   const { sessionID } = route.params;
@@ -32,42 +37,34 @@ export default function SessionScreen({ route, navigation }: Props) {
   const [sending, setSending] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
-  const {
-    sessions,
-    sessionStatuses,
-    messages,
-    parts,
-    permissions,
-    questions,
-    todos,
-    fetchMessages,
-    loadMoreMessages,
-    sendMessage,
-    abortSession,
-    replyPermission,
-    replyQuestion,
-    messageLoadingMore,
-    messageHasMore,
-    agents,
-    providers,
-    selectedAgent,
-    selectedModel,
-    setSelectedAgent,
-    setSelectedModel,
-    sessionErrors,
-    clearSessionError,
-  } = useAppStore();
+  const session = useAppStore((s) => s.sessions.get(sessionID));
+  const sessionMessages = useAppStore((s) => s.messages.get(sessionID) || EMPTY_ARRAY);
+  const sessionStatus = useAppStore((s) => s.sessionStatuses.get(sessionID));
+  const sessionPermissions = useAppStore(useShallow((s) => s.permissions.filter((p) => p.sessionID === sessionID)));
+  const sessionQuestions = useAppStore(useShallow((s) => s.questions.filter((q) => q.sessionID === sessionID)));
+  const sessionTodos = useAppStore((s) => s.todos.get(sessionID) || EMPTY_TODOS);
+  const isLoadingMore = useAppStore((s) => s.messageLoadingMore.has(sessionID));
+  const hasMore = useAppStore((s) => s.messageHasMore.get(sessionID) !== false);
+  const sessionError = useAppStore((s) => s.sessionErrors.get(sessionID));
+  const partsMap = useAppStore((s) => s.parts);
+  const agents = useAppStore((s) => s.agents);
+  const providers = useAppStore((s) => s.providers);
+  const selectedAgent = useAppStore((s) => s.selectedAgent);
+  const selectedModel = useAppStore((s) => s.selectedModel);
 
-  const session = sessions.get(sessionID);
-  const sessionMessages = messages.get(sessionID) || [];
-  const sessionStatus = sessionStatuses.get(sessionID);
+  const fetchMessages = useAppStore((s) => s.fetchMessages);
+  const loadMoreMessages = useAppStore((s) => s.loadMoreMessages);
+  const fetchSessionTodos = useAppStore((s) => s.fetchSessionTodos);
+  const fetchSessionDiff = useAppStore((s) => s.fetchSessionDiff);
+  const sendMessage = useAppStore((s) => s.sendMessage);
+  const abortSession = useAppStore((s) => s.abortSession);
+  const replyPermission = useAppStore((s) => s.replyPermission);
+  const replyQuestion = useAppStore((s) => s.replyQuestion);
+  const setSelectedAgent = useAppStore((s) => s.setSelectedAgent);
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const clearSessionError = useAppStore((s) => s.clearSessionError);
+
   const isBusy = sessionStatus?.type === "busy";
-  const sessionPermissions = permissions.filter((p) => p.sessionID === sessionID);
-  const sessionQuestions = questions.filter((q) => q.sessionID === sessionID);
-  const sessionTodos = todos.get(sessionID) || [];
-  const isLoadingMore = messageLoadingMore.has(sessionID);
-  const hasMore = messageHasMore.get(sessionID) !== false;
-  const sessionError = sessionErrors.get(sessionID);
 
   useFocusEffect(
     useCallback(() => {
@@ -88,6 +85,8 @@ export default function SessionScreen({ route, navigation }: Props) {
         }
       }
       fetchMessages(sessionID);
+      fetchSessionTodos(sessionID);
+      fetchSessionDiff(sessionID);
     }, [sessionID, session?.model, session?.agent])
   );
 
@@ -141,11 +140,14 @@ export default function SessionScreen({ route, navigation }: Props) {
     await replyQuestion(requestID, answers);
   };
 
-  const renderItem = ({ item }: { item: Message }) => {
-    const msgParts = parts.get(`${sessionID}:${item.id}`);
-    const partList = msgParts ? Array.from(msgParts.values()) : [];
-    return <MessageBubble message={item} parts={partList} />;
-  };
+  const renderItem = useCallback(
+    ({ item }: { item: Message }) => {
+      const msgParts = partsMap.get(`${sessionID}:${item.id}`);
+      const partList = msgParts ? Array.from(msgParts.values()) : EMPTY_PARTS;
+      return <MessageBubble message={item} parts={partList} />;
+    },
+    [partsMap, sessionID]
+  );
 
   const ListFooter = hasMore ? (
     <View style={styles.loadMoreFooter}>
@@ -216,6 +218,7 @@ export default function SessionScreen({ route, navigation }: Props) {
         <FlatList
           ref={flatListRef}
           data={reversedMessages}
+          extraData={partsMap}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           style={styles.messageList}

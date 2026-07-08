@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project, Agent, ConfigProviders } from "../types/opencode";
+import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project, Agent, ConfigProviders, FileDiff } from "../types/opencode";
 import { logger } from "../utils/logger";
 
 const CONNECTION_KEY = "@opencode_connection";
@@ -242,6 +242,21 @@ class OpenCodeClient {
     return res.todos || [];
   }
 
+  async getSessionDiff(sessionID: string): Promise<FileDiff[] | null> {
+    try {
+      const diff = await this.request<FileDiff[]>(`/session/${sessionID}/diff`);
+      logger.info("client", `Loaded diff for session ${sessionID}`, { count: diff?.length || 0 });
+      return diff || [];
+    } catch (e: any) {
+      if (e.message?.includes("404")) {
+        logger.debug("client", `getSessionDiff: endpoint not available for session ${sessionID}`);
+      } else {
+        logger.warn("client", `getSessionDiff failed for ${sessionID}`, { error: e.message });
+      }
+      return null;
+    }
+  }
+
   async sendPrompt(
     sessionID: string,
     text: string,
@@ -259,7 +274,7 @@ class OpenCodeClient {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
       const res = await fetch(url, {
         method: "POST",
         headers: {

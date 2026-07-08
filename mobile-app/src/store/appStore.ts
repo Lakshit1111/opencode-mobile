@@ -18,6 +18,97 @@ import { sseManager } from "../api/sse";
 import { saveConnection, loadConnection, clearConnection } from "../api/client";
 import { logger } from "../utils/logger";
 
+interface DeltaEntry {
+  sessionID: string;
+  messageID: string;
+  partID: string;
+  delta: string;
+}
+
+const deltaBuffer: Map<string, DeltaEntry[]> = new Map();
+let flushTimer: ReturnType<typeof setInterval> | null = null;
+const FLUSH_INTERVAL_MS = 100;
+
+let storeSet: ((partial: any) => void) | null = null;
+
+function flushDeltas() {
+  if (deltaBuffer.size === 0) return;
+  const snapshot = new Map(deltaBuffer);
+  deltaBuffer.clear();
+  if (!storeSet) return;
+  storeSet((state: any) => {
+    const parts = new Map(state.parts);
+    for (const [, entries] of snapshot) {
+      for (const entry of entries) {
+        const msgKey = `${entry.sessionID}:${entry.messageID}`;
+        const msgParts = new Map<string, any>((parts.get(msgKey) as Map<string, any>) || []);
+        const existing = msgParts.get(entry.partID) as any;
+        if (existing && typeof existing.text === "string") {
+          msgParts.set(entry.partID, { ...existing, text: existing.text + entry.delta });
+        } else {
+          msgParts.set(entry.partID, {
+            id: entry.partID,
+            sessionID: entry.sessionID,
+            messageID: entry.messageID,
+            type: "text",
+            text: entry.delta,
+          });
+        }
+        parts.set(msgKey, msgParts);
+      }
+    }
+    return { parts };
+  });
+}
+
+function startFlushTimer() {
+  if (flushTimer) return;
+  flushTimer = setInterval(() => {
+    if (deltaBuffer.size > 0) {
+      flushDeltas();
+    }
+  }, FLUSH_INTERVAL_MS);
+}
+
+function stopFlushTimer() {
+  if (flushTimer) {
+    clearInterval(flushTimer);
+    flushTimer = null;
+  }
+  if (deltaBuffer.size > 0) {
+    flushDeltas();
+  }
+}
+
+function flushPartImmediately(sessionID: string, messageID: string, partID: string) {
+  const key = `${sessionID}:${messageID}:${partID}`;
+  const entries = deltaBuffer.get(key);
+  if (entries && entries.length > 0) {
+    deltaBuffer.delete(key);
+    if (!storeSet) return;
+    storeSet((state: any) => {
+      const parts = new Map(state.parts);
+      const msgKey = `${sessionID}:${messageID}`;
+      const msgParts = new Map<string, any>((parts.get(msgKey) as Map<string, any>) || []);
+      const existing = msgParts.get(partID) as any;
+      const fullDelta = entries.map((e) => e.delta).join("");
+      if (existing && typeof existing.text === "string") {
+        msgParts.set(partID, { ...existing, text: existing.text + fullDelta });
+      } else {
+        msgParts.set(partID, {
+          id: partID,
+          sessionID,
+          messageID,
+          type: "text",
+          text: fullDelta,
+        });
+      }
+      parts.set(msgKey, msgParts);
+      return { parts };
+    });
+  }
+}
+
 interface AppState {
   connection: ConnectionConfig | null;
   connected: boolean;
@@ -49,6 +140,8 @@ interface AppState {
   setSelectedAgent: (agent: string) => void;
   setSelectedModel: (model: { providerID: string; modelID: string } | null) => void;
   clearSessionError: (sessionID: string) => void;
+  fetchSessionTodos: (sessionID: string) => Promise<void>;
+  fetchSessionDiff: (sessionID: string) => Promise<void>;
   fetchMessages: (sessionID: string) => Promise<void>;
   loadMoreMessages: (sessionID: string) => Promise<void>;
   sendMessage: (sessionID: string, text: string) => Promise<void>;
@@ -242,6 +335,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  fetchSessionTodos: async (sessionID: string) => {
+    logger.info("store", `fetchSessionTodos called for ${sessionID}`);
+    try {
+      const todos = await client.getSessionTodos(sessionID);
+      set((state) => {
+        const todosMap = new Map(state.todos);
+        todosMap.set(sessionID, todos);
+        return { todos: todosMap };
+      });
+      logger.info("store", `fetchSessionTodos: loaded ${todos.length} todos for ${sessionID}`);
+    } catch (e: any) {
+      logger.error("store", `fetchSessionTodos failed for ${sessionID}`, { error: e.message });
+    }
+  },
+
+  fetchSessionDiff: async (sessionID: string) => {
+    logger.info("store", `fetchSessionDiff called for ${sessionID}`);
+    try {
+      const diff = await client.getSessionDiff(sessionID);
+      if (diff) {
+        set((state) => {
+          const diffs = new Map(state.diffs);
+          diffs.set(sessionID, diff);
+          return { diffs };
+        });
+        logger.info("store", `fetchSessionDiff: loaded ${diff.length} diff entries for ${sessionID}`);
+      }
+    } catch (e: any) {
+      logger.debug("store", `fetchSessionDiff failed for ${sessionID} (endpoint may not exist)`, { error: e.message });
+    }
+  },
+
   fetchMessages: async (sessionID: string) => {
     logger.info("store", `fetchMessages called for ${sessionID}`);
     const now = Date.now();
@@ -272,7 +397,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         lastFetchTime.set(sessionID, now);
         return { messages, parts, messageLimits, messageHasMore, lastFetchTime };
       });
-      logger.info("store", `fetchMessages: loaded ${entries.length} messages (limit=${limit})`);
+      logger.info("store", `fetchMessages: loaded ${entries.length} messages (limit=${limit})`, {
+        partCounts: entries.map(e => ({ id: e.info.id, role: e.info.role, parts: e.parts.length, partTypes: e.parts.map(p => p.type) })),
+      });
     } catch (e: any) {
       logger.error("store", `fetchMessages failed for ${sessionID}`, { error: e.message });
     }
@@ -418,9 +545,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
+    storeSet = set;
     const url = client.getEventStreamUrl();
     logger.info("store", "Starting event stream", { url });
     sseManager.connect(url);
+    startFlushTimer();
 
     sseManager.on("*", (event: Event) => {
       const { type, properties } = event as { type: string; properties: any };
@@ -468,15 +597,23 @@ export const useAppStore = create<AppState>((set, get) => ({
           break;
         }
         case "session.idle": {
+          logger.info("store", `session.idle for ${properties.sessionID} — fetching messages`);
+          flushDeltas();
           set((state) => {
             const sessionStatuses = new Map(state.sessionStatuses);
             sessionStatuses.set(properties.sessionID, { type: "idle" });
-            return { sessionStatuses };
+            const lastFetchTime = new Map(state.lastFetchTime);
+            lastFetchTime.set(properties.sessionID, 0);
+            return { sessionStatuses, lastFetchTime };
           });
+          get().fetchMessages(properties.sessionID);
           break;
         }
         case "message.updated": {
           const msg = properties.info;
+          logger.info("store", `message.updated: ${msg?.id} role=${msg?.role} session=${msg?.sessionID}`, {
+            completed: msg?.time?.completed,
+          });
           if (msg?.sessionID && msg?.id) {
             set((state) => {
               const messages = new Map(state.messages);
@@ -496,6 +633,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         case "message.part.updated": {
           const part = properties.part;
           if (part?.sessionID && part?.messageID && part?.id) {
+            flushPartImmediately(part.sessionID, part.messageID, part.id);
             set((state) => {
               const parts = new Map(state.parts);
               const msgKey = `${part.sessionID}:${part.messageID}`;
@@ -510,26 +648,59 @@ export const useAppStore = create<AppState>((set, get) => ({
         case "message.part.delta": {
           const { sessionID: sID, messageID: mID, partID: pID, field, delta } = properties;
           if (sID && mID && pID && field === "text" && delta) {
+            const key = `${sID}:${mID}:${pID}`;
+            const existing = deltaBuffer.get(key);
+            if (existing) {
+              existing.push({ sessionID: sID, messageID: mID, partID: pID, delta });
+            } else {
+              deltaBuffer.set(key, [{ sessionID: sID, messageID: mID, partID: pID, delta }]);
+            }
+            startFlushTimer();
+          }
+          break;
+        }
+        case "message.part.removed": {
+          const { sessionID: sID, messageID: mID, partID: pID } = properties;
+          if (sID && mID && pID) {
             set((state) => {
               const parts = new Map(state.parts);
               const msgKey = `${sID}:${mID}`;
-              const msgParts = new Map(parts.get(msgKey) || new Map());
-              const existing = msgParts.get(pID) as any;
-              if (existing && typeof existing.text === "string") {
-                msgParts.set(pID, { ...existing, text: existing.text + delta });
-              } else {
-                msgParts.set(pID, { id: pID, sessionID: sID, messageID: mID, type: "text", text: delta });
+              const msgParts = parts.get(msgKey);
+              if (msgParts) {
+                const updated = new Map(msgParts);
+                updated.delete(pID);
+                if (updated.size === 0) {
+                  parts.delete(msgKey);
+                } else {
+                  parts.set(msgKey, updated);
+                }
               }
-              parts.set(msgKey, msgParts);
               return { parts };
             });
           }
           break;
         }
-        case "message.part.removed":
-        case "message.removed":
+        case "message.removed": {
+          const { sessionID: sID, messageID: mID } = properties;
+          if (sID && mID) {
+            set((state) => {
+              const messages = new Map(state.messages);
+              const sessionMsgs = messages.get(sID);
+              if (sessionMsgs) {
+                messages.set(sID, sessionMsgs.filter((m) => m.id !== mID));
+              }
+              const parts = new Map(state.parts);
+              parts.delete(`${sID}:${mID}`);
+              return { messages, parts };
+            });
+          }
+          break;
+        }
         case "file.edited":
+          logger.info("store", "file.edited", properties);
+          break;
         case "command.executed":
+          logger.info("store", "command.executed", properties);
           break;
         case "permission.asked": {
           logger.info("store", "Permission requested", properties);
@@ -567,6 +738,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   stopEventStream: () => {
     logger.info("store", "stopEventStream called");
+    stopFlushTimer();
+    storeSet = null;
     sseManager.disconnect();
   },
 }));

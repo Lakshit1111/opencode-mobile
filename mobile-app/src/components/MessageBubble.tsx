@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import type { Message, Part } from "../types/opencode";
 import { Colors, Spacing, FontSizes, BorderRadii } from "../constants/theme";
@@ -16,7 +16,7 @@ function formatTime(ts: number): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export default function MessageBubble({ message, parts }: Props) {
+function MessageBubble({ message, parts }: Props) {
   const isUser = message.role === "user";
 
   const sortedParts = [...parts].sort((a, b) => {
@@ -69,6 +69,21 @@ export default function MessageBubble({ message, parts }: Props) {
     </View>
   );
 }
+
+function arePropsEqual(prev: Props, next: Props): boolean {
+  if (prev.message.id !== next.message.id) return false;
+  if (prev.message.time.completed !== next.message.time.completed) return false;
+  if (prev.parts.length !== next.parts.length) return false;
+  const lastPrev = prev.parts[prev.parts.length - 1] as any;
+  const lastNext = next.parts[next.parts.length - 1] as any;
+  if (lastPrev && lastNext) {
+    if (lastPrev.text !== lastNext.text) return false;
+    if (lastPrev.state?.status !== lastNext.state?.status) return false;
+  }
+  return true;
+}
+
+export default memo(MessageBubble, arePropsEqual);
 
 const styles = StyleSheet.create({
   container: {

@@ -54,6 +54,8 @@ export default function SessionScreen({ route, navigation }: Props) {
     selectedModel,
     setSelectedAgent,
     setSelectedModel,
+    sessionErrors,
+    clearSessionError,
   } = useAppStore();
 
   const session = sessions.get(sessionID);
@@ -65,12 +67,28 @@ export default function SessionScreen({ route, navigation }: Props) {
   const sessionTodos = todos.get(sessionID) || [];
   const isLoadingMore = messageLoadingMore.has(sessionID);
   const hasMore = messageHasMore.get(sessionID) !== false;
+  const sessionError = sessionErrors.get(sessionID);
 
   useFocusEffect(
     useCallback(() => {
       logger.info("session", `SessionScreen focused for ${sessionID}`, { title: session?.title });
+      if (session?.model) {
+        const sessionModel = { providerID: session.model.providerID, modelID: session.model.id };
+        const current = useAppStore.getState().selectedModel;
+        if (!current || current.providerID !== sessionModel.providerID || current.modelID !== sessionModel.modelID) {
+          logger.info("session", `Syncing selectedModel to session's model`, sessionModel);
+          useAppStore.getState().setSelectedModel(sessionModel);
+        }
+      }
+      if (session?.agent) {
+        const currentAgent = useAppStore.getState().selectedAgent;
+        if (currentAgent !== session.agent) {
+          logger.info("session", `Syncing selectedAgent to session's agent`, { agent: session.agent });
+          useAppStore.getState().setSelectedAgent(session.agent);
+        }
+      }
       fetchMessages(sessionID);
-    }, [sessionID])
+    }, [sessionID, session?.model, session?.agent])
   );
 
   useEffect(() => {
@@ -98,6 +116,7 @@ export default function SessionScreen({ route, navigation }: Props) {
     logger.info("session", `Sending message to ${sessionID}`, { textLength: text.length });
     setInputText("");
     setSending(true);
+    clearSessionError(sessionID);
     try {
       await sendMessage(sessionID, text);
       logger.info("session", "Message sent successfully");
@@ -149,6 +168,15 @@ export default function SessionScreen({ route, navigation }: Props) {
         style={styles.inner}
         keyboardVerticalOffset={90}
       >
+        {sessionError && (
+          <View style={styles.errorBar}>
+            <Text style={styles.errorText}>{sessionError}</Text>
+            <TouchableOpacity onPress={() => clearSessionError(sessionID)} style={styles.errorDismiss}>
+              <Text style={styles.errorDismissText}>Dismiss</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {sessionStatus && (
           <View
             style={[
@@ -241,6 +269,34 @@ const styles = StyleSheet.create({
   },
   inner: {
     flex: 1,
+  },
+  errorBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#5a1a1a",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.dark.error,
+  },
+  errorText: {
+    flex: 1,
+    color: "#ffcccc",
+    fontSize: FontSizes.xs,
+    fontFamily: "monospace",
+  },
+  errorDismiss: {
+    marginLeft: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    backgroundColor: Colors.dark.error,
+    borderRadius: BorderRadii.sm,
+  },
+  errorDismissText: {
+    color: "#fff",
+    fontSize: FontSizes.xs,
+    fontWeight: "600",
   },
   statusBar: {
     flexDirection: "row",

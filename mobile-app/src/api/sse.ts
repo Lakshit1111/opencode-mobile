@@ -12,6 +12,8 @@ class SSEManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string = "";
   private eventCount = 0;
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogTimeoutMs = 30000;
 
   connect(url: string) {
     logger.info("sse", "connect() called", { url });
@@ -20,6 +22,16 @@ class SSEManager {
     this.reconnectAttempts = 0;
     this.eventCount = 0;
     this._connect();
+  }
+
+  private resetWatchdog() {
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = setTimeout(() => {
+      logger.warn("sse", `Watchdog: no events for ${this.watchdogTimeoutMs}ms, forcing reconnect`);
+      this.eventSource?.close();
+      this.eventSource = null;
+      this.scheduleReconnect();
+    }, this.watchdogTimeoutMs);
   }
 
   private _connect() {
@@ -40,15 +52,22 @@ class SSEManager {
       this.eventSource.addEventListener("open", () => {
         logger.info("sse", "Connection opened");
         this.reconnectAttempts = 0;
+        this.resetWatchdog();
       });
 
       this.eventSource.addEventListener("message", (msg: any) => {
         try {
-          const event: Event = JSON.parse(msg.data);
-          this.eventCount++;
-          if (this.eventCount <= 5 || this.eventCount % 50 === 0) {
-            logger.debug("sse", `Event #${this.eventCount}: ${event.type}`);
+          this.resetWatchdog();
+          const raw = msg.data;
+          logger.debug("sse", `raw message data`, { preview: raw?.substring?.(0, 300) });
+          let parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object" && "payload" in parsed && parsed.payload?.type) {
+            parsed = parsed.payload;
           }
+          const event = parsed as Event;
+          if ((event as any).type === "sync") return;
+          this.eventCount++;
+          logger.info("sse", `Event #${this.eventCount}: ${event.type}`, { sessionID: (event as any).properties?.sessionID });
           this.emit(event.type, event);
           this.emit("*", event);
         } catch (e: any) {
@@ -60,21 +79,44 @@ class SSEManager {
         logger.error("sse", `Connection error`, { attempt: this.reconnectAttempts + 1, error: e?.message || "unknown" });
         this.eventSource?.close();
         this.eventSource = null;
-        this.reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-        logger.info("sse", `Reconnecting in ${delay}ms`);
-        this.reconnectTimer = setTimeout(() => this._connect(), delay);
+        if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
+        this.scheduleReconnect();
       });
 
       this.eventSource.addEventListener("close", () => {
-        logger.info("sse", "Connection closed by server");
+        logger.warn("sse", "Connection closed by server — scheduling reconnect");
+        this.eventSource = null;
+        if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
+        this.scheduleReconnect();
       });
     } catch (e: any) {
       logger.error("sse", "Failed to create EventSource", { error: e.message, url: this.url });
     }
   }
 
+  private scheduleReconnect() {
+    if (this.reconnectTimer) {
+      logger.debug("sse", "scheduleReconnect: already pending, skipping");
+      return;
+    }
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+      logger.error("sse", `Max reconnect attempts (${this.maxReconnectAttempts}) reached — giving up`);
+      return;
+    }
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    logger.info("sse", `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this._connect();
+    }, delay);
+  }
+
   disconnect() {
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

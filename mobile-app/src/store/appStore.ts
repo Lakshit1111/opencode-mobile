@@ -38,6 +38,7 @@ interface AppState {
   providers: ConfigProviders | null;
   selectedAgent: string;
   selectedModel: { providerID: string; modelID: string } | null;
+  sessionErrors: Map<string, string>;
 
   setConnection: (config: ConnectionConfig) => Promise<void>;
   disconnect: () => Promise<void>;
@@ -47,6 +48,7 @@ interface AppState {
   fetchProviders: () => Promise<void>;
   setSelectedAgent: (agent: string) => void;
   setSelectedModel: (model: { providerID: string; modelID: string } | null) => void;
+  clearSessionError: (sessionID: string) => void;
   fetchMessages: (sessionID: string) => Promise<void>;
   loadMoreMessages: (sessionID: string) => Promise<void>;
   sendMessage: (sessionID: string, text: string) => Promise<void>;
@@ -78,6 +80,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   providers: null,
   selectedAgent: "build",
   selectedModel: null,
+  sessionErrors: new Map(),
 
   setConnection: async (config: ConnectionConfig) => {
     logger.info("store", "setConnection called", { url: config.bridgeUrl, keyLength: config.apiKey.length });
@@ -117,6 +120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       providers: null,
       selectedAgent: "build",
       selectedModel: null,
+      sessionErrors: new Map(),
     });
     logger.info("store", "Disconnected and state cleared");
   },
@@ -230,6 +234,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ selectedModel: model });
   },
 
+  clearSessionError: (sessionID: string) => {
+    set((state) => {
+      const sessionErrors = new Map(state.sessionErrors);
+      sessionErrors.delete(sessionID);
+      return { sessionErrors };
+    });
+  },
+
   fetchMessages: async (sessionID: string) => {
     logger.info("store", `fetchMessages called for ${sessionID}`);
     const now = Date.now();
@@ -320,12 +332,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: async (sessionID: string, text: string) => {
-    const { selectedAgent, selectedModel } = get();
-    logger.info("store", `sendMessage to ${sessionID}`, { textLength: text.length, agent: selectedAgent, model: selectedModel });
+    const { selectedAgent, selectedModel, sessions } = get();
+    const session = sessions.get(sessionID);
+    const sessionModel = session?.model
+      ? { providerID: session.model.providerID, modelID: session.model.id }
+      : null;
+    const sessionAgent = session?.agent || null;
+    const modelMatchesSession =
+      selectedModel &&
+      sessionModel &&
+      selectedModel.providerID === sessionModel.providerID &&
+      selectedModel.modelID === sessionModel.modelID;
+    const modelToSend = modelMatchesSession ? undefined : selectedModel || undefined;
+    logger.info("store", `sendMessage to ${sessionID}`, {
+      textLength: text.length,
+      agent: selectedAgent,
+      model: modelToSend,
+      sessionModel,
+      sessionAgent,
+      matches: !!modelMatchesSession,
+    });
     try {
       await client.sendPrompt(sessionID, text, {
         agent: selectedAgent !== "build" ? selectedAgent : undefined,
-        model: selectedModel || undefined,
+        model: modelToSend,
       });
       logger.info("store", "sendMessage success");
       setTimeout(() => {
@@ -396,6 +426,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { type, properties } = event as { type: string; properties: any };
 
       switch (type) {
+        case "session.error": {
+          const errMsg = (properties as any).error?.data?.message || (properties as any).error?.message || "Unknown session error";
+          logger.error("store", `session.error for ${properties.sessionID}`, { message: errMsg });
+          set((state) => {
+            const sessionErrors = new Map(state.sessionErrors);
+            sessionErrors.set(properties.sessionID, errMsg);
+            return { sessionErrors };
+          });
+          break;
+        }
         case "session.created":
         case "session.updated": {
           const info = properties.info || properties;

@@ -25,6 +25,12 @@ export interface Session {
     diffs?: FileDiff[];
   };
   share?: { url: string };
+  model?: {
+    id: string;
+    providerID: string;
+    variant?: string;
+  };
+  agent?: string;
 }
 
 export interface Message {

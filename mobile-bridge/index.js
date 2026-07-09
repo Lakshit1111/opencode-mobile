@@ -19,26 +19,65 @@ function log(level, tag, message, data) {
   else console.log(prefix, message);
 }
 
+function genServerId() {
+  return "srv-" + crypto.randomBytes(4).toString("hex");
+}
+
+function normalizeProfile(p) {
+  return {
+    id: p.id || genServerId(),
+    name: p.name || "OpenCode server",
+    url: (p.url || "").replace(/\/+$/, ""),
+    username: p.username && p.username.length ? p.username : "opencode",
+    password: p.password || "",
+    autoDiscover: p.autoDiscover === true,
+  };
+}
+
 function loadConfig() {
   const defaults = {
     apiKey: "",
     allowedIPs: ["*"],
     maxConnections: 5,
     bridgePort: 3456,
-    opencodeBaseUrl: "http://127.0.0.1:8765",
-    opencodeUsername: "",
-    opencodePassword: "",
+    servers: [],
+    activeServerId: "",
     autoStartBridge: true,
     logLevel: "info",
-    autoDiscover: true,
   };
   if (fs.existsSync(CONFIG_PATH)) {
+    let saved;
     try {
-      const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-      return { ...defaults, ...saved };
+      saved = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
     } catch (e) {
       console.error("Failed to parse config.json, using defaults:", e.message);
+      return defaults;
     }
+    let cfg = { ...defaults, ...saved };
+
+    // Migrate legacy single-server config into the servers array.
+    const hasServers = Array.isArray(cfg.servers) && cfg.servers.length > 0;
+    const legacyUrl = cfg.opencodeBaseUrl;
+    if (!hasServers && legacyUrl && typeof legacyUrl === "string") {
+      const profile = normalizeProfile({
+        id: "srv-migrated",
+        name: "Migrated server",
+        url: legacyUrl,
+        username: cfg.opencodeUsername || "opencode",
+        password: cfg.opencodePassword || "",
+        autoDiscover: cfg.autoDiscover === true,
+      });
+      cfg.servers = [profile];
+      cfg.activeServerId = profile.id;
+      // Keep legacy keys around for reference but they are no longer authoritative.
+      log("info", "config", "Migrated legacy opencodeBaseUrl into servers array", { url: profile.url });
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n");
+    }
+    cfg.servers = (cfg.servers || []).map(normalizeProfile);
+    if (!cfg.activeServerId && cfg.servers.length > 0) {
+      cfg.activeServerId = cfg.servers[0].id;
+    }
+    return cfg;
   }
   return defaults;
 }
@@ -61,6 +100,11 @@ function ensureApiKey(cfg) {
     console.log("");
   }
   return cfg;
+}
+
+function activeServer(cfg) {
+  if (!cfg.servers || cfg.servers.length === 0) return null;
+  return cfg.servers.find((s) => s.id === cfg.activeServerId) || cfg.servers[0];
 }
 
 function basicAuthHeader(username, password) {
@@ -90,10 +134,14 @@ async function tryServer(url, authHeader) {
   }
 }
 
-async function discoverOpenCodeServer(configuredUrl, configuredUser, configuredPass) {
-  log("info", "discovery", "Starting auto-discovery for OpenCode servers");
+// Discovery operates on a single profile. It scans for local OpenCode processes
+// and tries auth using the profile's credentials + any OPENCODE_SERVER_PASSWORD
+// env var. On success it mutates the profile (url/username/password) and returns
+// { profile, allServers } or null.
+async function discoverProfile(profile) {
+  log("info", "discovery", "Starting auto-discovery for profile", { id: profile.id, name: profile.name });
   const candidates = new Set();
-  if (configuredUrl) candidates.add(configuredUrl.replace(/\/+$/, ""));
+  if (profile.url) candidates.add(profile.url.replace(/\/+$/, ""));
 
   try {
     const os = require("os");
@@ -127,7 +175,7 @@ async function discoverOpenCodeServer(configuredUrl, configuredUser, configuredP
   const envUser = process.env.OPENCODE_SERVER_USERNAME || "opencode";
   const authHeaders = new Set();
   authHeaders.add(undefined);
-  if (configuredPass) authHeaders.add(basicAuthHeader(configuredUser, configuredPass));
+  if (profile.password) authHeaders.add(basicAuthHeader(profile.username, profile.password));
   if (envPassword) authHeaders.add(basicAuthHeader(envUser, envPassword));
 
   let best = null;
@@ -135,34 +183,74 @@ async function discoverOpenCodeServer(configuredUrl, configuredUser, configuredP
   for (const url of candidates) {
     const noAuthResult = await tryServer(url, undefined);
     let authResult = null;
-    let usedAuth = null;
     for (const auth of authHeaders) {
       if (auth === undefined) continue;
       const r = await tryServer(url, auth);
-      if (r) { authResult = { ...r, authHeader: auth }; usedAuth = auth; break; }
+      if (r) { authResult = { ...r, authHeader: auth }; break; }
     }
     const result = authResult || noAuthResult;
     if (result) {
       const requiresAuth = !noAuthResult && !!authResult;
       const score = result.sessionCount + (requiresAuth ? 10000 : 0);
-      const serverInfo = {
+      const info = {
         url: result.url,
         sessionCount: result.sessionCount,
-        username: requiresAuth ? envUser || configuredUser : "",
-        password: requiresAuth ? (envPassword || configuredPass || "") : "",
+        username: requiresAuth ? envUser : "",
+        password: requiresAuth ? (envPassword || profile.password || "") : "",
         score,
       };
-      allWorking.push(serverInfo);
-      log("debug", "discovery", `Candidate scored`, { url, sessions: result.sessionCount, requiresAuth, score });
-      if (!best || score > best.score) {
-        best = serverInfo;
-      }
+      allWorking.push(info);
+      if (!best || score > best.score) best = info;
     }
   }
-  if (best) {
-    best.allServers = allWorking.map(s => ({ url: s.url, username: s.username, password: s.password }));
+
+  if (!best) return null;
+  return {
+    url: best.url,
+    username: best.username || profile.username,
+    password: best.password,
+    sessionCount: best.sessionCount,
+    allServers: allWorking.map((s) => ({ url: s.url, username: s.username, password: s.password })),
+  };
+}
+
+async function runDiscoveryForActive(cfg, { persist = true } = {}) {
+  const profile = activeServer(cfg);
+  if (!profile) return null;
+  if (!profile.autoDiscover) {
+    log("debug", "discovery", `Profile ${profile.id} has autoDiscover=false, skipping`);
+    return null;
   }
-  return best;
+  const discovered = await discoverProfile(profile);
+  if (!discovered) return null;
+  profile.url = discovered.url;
+  if (discovered.username) profile.username = discovered.username;
+  if (discovered.password) profile.password = discovered.password;
+  if (persist) saveConfig(cfg);
+  log("info", "discovery", `Discovered server for profile ${profile.id}`, { url: discovered.url, sessions: discovered.sessionCount });
+  return discovered;
+}
+
+async function testProfile(profile) {
+  const authHeader = basicAuthHeader(profile.username, profile.password);
+  const noAuth = await tryServer(profile.url, undefined);
+  const withAuth = authHeader ? await tryServer(profile.url, authHeader) : null;
+  if (noAuth) {
+    return { healthy: true, requiresAuth: false, version: noAuth.version, sessionCount: noAuth.sessionCount };
+  }
+  if (withAuth) {
+    return { healthy: true, requiresAuth: true, version: withAuth.version, sessionCount: withAuth.sessionCount };
+  }
+  // If unauth health fails with 401/403, the server is up but needs auth.
+  try {
+    const r = await fetch(profile.url + "/global/health", { headers: { Accept: "application/json", "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(2000) });
+    if (r.status === 401 || r.status === 403) {
+      return { healthy: false, requiresAuth: true, error: `HTTP ${r.status}` };
+    }
+    return { healthy: false, requiresAuth: false, error: `HTTP ${r.status}` };
+  } catch (e) {
+    return { healthy: false, requiresAuth: false, error: e.message };
+  }
 }
 
 async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
@@ -271,55 +359,51 @@ async function proxyRequest(req, res, opencodeUrl, targetPath, opencodeAuth) {
   }
 }
 
+function ocAuthPair(profile) {
+  return profile && profile.password ? `${profile.username}:${profile.password}` : null;
+}
+
 async function startServer() {
   let config = loadConfig();
   config = ensureApiKey(config);
-  global.__BRIDGE_CFG__ = config;
-  log("info", "bridge", "Config loaded", { bridgePort: config.bridgePort, opencodeBaseUrl: config.opencodeBaseUrl, logLevel: config.logLevel });
-
-  const discoveredServers = [];
-  if (config.autoDiscover) {
-    const discovered = await discoverOpenCodeServer(config.opencodeBaseUrl, config.opencodeUsername, config.opencodePassword);
-    if (discovered) {
-      config.opencodeBaseUrl = discovered.url;
-      config.opencodeUsername = discovered.username || "";
-      config.opencodePassword = discovered.password || "";
-      global.__BRIDGE_CFG__ = config;
-      log("info", "bridge", `Auto-discovered OpenCode server`, { url: discovered.url, sessions: discovered.sessionCount });
-      if (discovered.allServers) {
-        discoveredServers.push(...discovered.allServers);
-        log("info", "bridge", `All discovered servers`, { count: discoveredServers.length, urls: discoveredServers.map(s => s.url) });
-      } else {
-        discoveredServers.push({ url: discovered.url, username: discovered.username || "", password: discovered.password || "" });
-      }
-    } else {
-      log("warn", "bridge", "Auto-discover failed, using configured URL", { url: config.opencodeBaseUrl });
-      discoveredServers.push({ url: config.opencodeBaseUrl, username: config.opencodeUsername, password: config.opencodePassword });
-    }
-  } else {
-    discoveredServers.push({ url: config.opencodeBaseUrl, username: config.opencodeUsername, password: config.opencodePassword });
+  if (config.servers.length === 0) {
+    // No servers at all: seed an empty profile so the app can configure it.
+    const seeded = normalizeProfile({ id: "srv-default", name: "Default server", url: "http://127.0.0.1:8765", autoDiscover: false });
+    config.servers = [seeded];
+    config.activeServerId = seeded.id;
+    saveConfig(config);
   }
+  global.__BRIDGE_CFG__ = config;
+  const cur0 = activeServer(config);
+  log("info", "bridge", "Config loaded", { bridgePort: config.bridgePort, servers: config.servers.length, active: cur0 ? cur0.id : null, logLevel: config.logLevel });
+
+  // Run discovery for the active profile on startup if enabled.
+  await runDiscoveryForActive(config, { persist: true });
+  global.__BRIDGE_CFG__ = config;
 
   let reDiscovering = false;
   async function checkHealthAndReDiscover() {
     if (reDiscovering) return;
+    const profile = activeServer(config);
+    if (!profile) return;
+    if (!profile.autoDiscover) return; // manual profiles are never auto-changed
     try {
-      const authHdr = config.opencodePassword ? basicAuthHeader(config.opencodeUsername, config.opencodePassword) : undefined;
+      const authHdr = basicAuthHeader(profile.username, profile.password);
       const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
       if (authHdr) headers["Authorization"] = authHdr;
-      const r = await fetch(config.opencodeBaseUrl + "/global/health", { headers, signal: AbortSignal.timeout(3000) });
+      const r = await fetch(profile.url + "/global/health", { headers, signal: AbortSignal.timeout(3000) });
       if (r.ok) return;
     } catch {
     }
-    log("warn", "bridge", "OpenCode server unreachable, re-discovering...", { url: config.opencodeBaseUrl });
+    log("warn", "bridge", "Active OpenCode server unreachable, re-discovering...", { url: profile.url });
     reDiscovering = true;
     try {
-      const discovered = await discoverOpenCodeServer(config.opencodeBaseUrl, config.opencodeUsername, config.opencodePassword);
+      const discovered = await discoverProfile(profile);
       if (discovered) {
-        config.opencodeBaseUrl = discovered.url;
-        config.opencodeUsername = discovered.username || "";
-        config.opencodePassword = discovered.password || "";
-        global.__BRIDGE_CFG__ = config;
+        profile.url = discovered.url;
+        if (discovered.username) profile.username = discovered.username;
+        if (discovered.password) profile.password = discovered.password;
+        saveConfig(config);
         log("info", "bridge", `Re-discovered OpenCode server`, { url: discovered.url, sessions: discovered.sessionCount });
       }
     } catch (e) {
@@ -397,31 +481,55 @@ async function startServer() {
     next();
   }
 
+  function activeInfo() {
+    const profile = activeServer(config);
+    if (!profile) return null;
+    return {
+      id: profile.id,
+      name: profile.name,
+      url: profile.url,
+      username: profile.username,
+      requiresAuth: !!profile.password,
+      autoDiscover: profile.autoDiscover,
+    };
+  }
+
   app.get("/api/health", authenticate, async (req, res) => {
+    const profile = activeServer(config);
     let ocHealthy = false;
     let ocVersion = undefined;
-    try {
-      const ocHeaders = { Accept: "application/json", "Accept-Encoding": "identity" };
-      if (config.opencodePassword) {
-        ocHeaders["Authorization"] = "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64");
-      }
-      const ocRes = await fetch(new URL("/global/health", config.opencodeBaseUrl), {
-        headers: ocHeaders,
-        signal: AbortSignal.timeout(3000),
-      });
-      if (ocRes.ok) {
-        const ocData = await ocRes.json();
-        ocHealthy = ocData.healthy === true;
-        ocVersion = ocData.version;
-      }
-    } catch (_) {}
+    let requiresAuth = false;
+    if (profile) {
+      try {
+        const ocHeaders = { Accept: "application/json", "Accept-Encoding": "identity" };
+        if (profile.password) {
+          ocHeaders["Authorization"] = "Basic " + Buffer.from(`${profile.username}:${profile.password}`).toString("base64");
+        }
+        const ocRes = await fetch(new URL("/global/health", profile.url), {
+          headers: ocHeaders,
+          signal: AbortSignal.timeout(3000),
+        });
+        if (ocRes.ok) {
+          const ocData = await ocRes.json();
+          ocHealthy = ocData.healthy === true;
+          ocVersion = ocData.version;
+          requiresAuth = !!profile.password;
+        } else if (ocRes.status === 401 || ocRes.status === 403) {
+          requiresAuth = true;
+        }
+      } catch (_) {}
+    }
+    const info = activeInfo();
     res.json({
       healthy: ocHealthy,
       version: ocVersion,
       status: "ok",
       bridgeEnabled: state.bridgeEnabled,
       connectedClients: state.connectedClients.size,
-      opencodeUrl: config.opencodeBaseUrl,
+      opencodeUrl: profile ? profile.url : null,
+      activeServerId: info ? info.id : null,
+      activeServerName: info ? info.name : null,
+      requiresAuth,
     });
   });
 
@@ -439,7 +547,8 @@ async function startServer() {
         ip: info.ip,
         connectedAt: info.connectedAt,
       })),
-      opencodeUrl: config.opencodeBaseUrl,
+      opencodeUrl: activeServer(config)?.url || null,
+      activeServerId: config.activeServerId || null,
       apiKey: config.apiKey,
     });
   });
@@ -449,15 +558,112 @@ async function startServer() {
   });
 
   app.put("/api/config", authenticate, (req, res) => {
-    const allowed = ["allowedIPs", "maxConnections", "opencodeBaseUrl", "logLevel", "autoDiscover"];
+    const allowed = ["allowedIPs", "maxConnections", "logLevel", "servers", "activeServerId"];
     allowed.forEach((key) => {
       if (req.body[key] !== undefined) {
-        config[key] = req.body[key];
+        if (key === "servers" && Array.isArray(req.body.servers)) {
+          config.servers = req.body.servers.map(normalizeProfile);
+        } else {
+          config[key] = req.body[key];
+        }
       }
     });
     saveConfig(config);
+    global.__BRIDGE_CFG__ = config;
     res.json(config);
   });
+
+  // --- Server profile management ---
+  app.get("/api/servers", authenticate, (req, res) => {
+    res.json({
+      servers: config.servers,
+      activeServerId: config.activeServerId,
+    });
+  });
+
+  app.post("/api/servers", authenticate, (req, res) => {
+    const body = req.body || {};
+    if (!body.url || typeof body.url !== "string") {
+      return res.status(400).json({ error: "url is required" });
+    }
+    const profile = normalizeProfile({
+      id: genServerId(),
+      name: body.name || "OpenCode server",
+      url: body.url,
+      username: body.username,
+      password: body.password,
+      autoDiscover: body.autoDiscover === true,
+    });
+    config.servers.push(profile);
+    if (!config.activeServerId) config.activeServerId = profile.id;
+    saveConfig(config);
+    log("info", "servers", `Added profile ${profile.id}`, { name: profile.name, url: profile.url });
+    res.status(201).json(profile);
+  });
+
+  app.put("/api/servers/:id", authenticate, (req, res) => {
+    const profile = config.servers.find((s) => s.id === req.params.id);
+    if (!profile) return res.status(404).json({ error: "Server not found" });
+    const body = req.body || {};
+    const allowed = ["name", "url", "username", "password", "autoDiscover"];
+    allowed.forEach((key) => {
+      if (body[key] !== undefined) {
+        if (key === "url" && typeof body.url === "string") profile.url = body.url.replace(/\/+$/, "");
+        else if (key === "username") profile.username = (body.username || "").length ? body.username : "opencode";
+        else if (key === "password") profile.password = body.password || "";
+        else if (key === "autoDiscover") profile.autoDiscover = body.autoDiscover === true;
+        else profile[key] = body[key];
+      }
+    });
+    saveConfig(config);
+    log("info", "servers", `Updated profile ${profile.id}`, { name: profile.name, url: profile.url });
+    res.json(profile);
+  });
+
+  app.delete("/api/servers/:id", authenticate, (req, res) => {
+    const id = req.params.id;
+    if (id === config.activeServerId) {
+      return res.status(400).json({ error: "Cannot delete the active server. Activate another first." });
+    }
+    const before = config.servers.length;
+    config.servers = config.servers.filter((s) => s.id !== id);
+    if (config.servers.length === before) {
+      return res.status(404).json({ error: "Server not found" });
+    }
+    if (config.servers.length === 0) {
+      return res.status(400).json({ error: "At least one server is required." });
+    }
+    saveConfig(config);
+    log("info", "servers", `Deleted profile ${id}`);
+    res.json({ ok: true });
+  });
+
+  app.post("/api/servers/:id/test", authenticate, async (req, res) => {
+    const profile = config.servers.find((s) => s.id === req.params.id);
+    if (!profile) return res.status(404).json({ error: "Server not found" });
+    const result = await testProfile(profile);
+    log("info", "servers", `Test profile ${profile.id}`, result);
+    res.json(result);
+  });
+
+  app.post("/api/servers/:id/activate", authenticate, async (req, res) => {
+    const profile = config.servers.find((s) => s.id === req.params.id);
+    if (!profile) return res.status(404).json({ error: "Server not found" });
+    config.activeServerId = profile.id;
+    if (profile.autoDiscover) {
+      await runDiscoveryForActive(config, { persist: true });
+    } else {
+      saveConfig(config);
+    }
+    global.__BRIDGE_CFG__ = config;
+    const test = await testProfile(profile);
+    log("info", "servers", `Activated profile ${profile.id}`, { url: profile.url, healthy: test.healthy, requiresAuth: test.requiresAuth });
+    res.json({
+      activeServerId: profile.id,
+      ...test,
+    });
+  });
+  // --- end server profile management ---
 
   app.all("/api/opencode/*", authenticate, checkIP, checkBridgeEnabled, async (req, res) => {
     const targetPath = "/" + req.params[0];
@@ -472,36 +678,24 @@ async function startServer() {
       maxConnections: config.maxConnections,
     });
 
-    const isPostToSession = req.method === "POST" && targetPath.match(/^\/session\/[^/]+\/(message|abort)/);
-    if (isPostToSession) {
-      for (const srv of discoveredServers) {
-        const ocAuth = srv.password ? `${srv.username}:${srv.password}` : null;
-        log("debug", "proxy", `Trying server ${srv.url} for ${targetWithPathQuery}`);
-        const result = await proxyRequest(req, res, srv.url, targetWithPathQuery, ocAuth);
-        if (result === null && !res.headersSent) {
-          log("debug", "proxy", `Server ${srv.url} returned null (500 or error), trying next...`);
-          continue;
-        }
-        return;
-      }
-      if (!res.headersSent) {
-        log("error", "proxy", `All servers failed for ${targetWithPathQuery}`);
-        res.status(502).json({ error: "All OpenCode servers failed to process request" });
-      }
-    } else {
-      const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
-      await proxyRequest(req, res, config.opencodeBaseUrl, targetWithPathQuery, ocAuth);
+    const profile = activeServer(config);
+    if (!profile) {
+      return res.status(502).json({ error: "No active OpenCode server configured. Add one via /api/servers." });
     }
+    const ocAuth = ocAuthPair(profile);
+    await proxyRequest(req, res, profile.url, targetWithPathQuery, ocAuth);
   });
 
   app.get("/api/test/proxy", authenticate, async (req, res) => {
     try {
-      const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
+      const profile = activeServer(config);
+      if (!profile) return res.status(400).json({ error: "No active server" });
+      const ocAuth = ocAuthPair(profile);
       const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
       if (ocAuth) {
         headers["Authorization"] = "Basic " + Buffer.from(ocAuth).toString("base64");
       }
-      const r = await fetch(new URL("/global/health", config.opencodeBaseUrl), { headers });
+      const r = await fetch(new URL("/global/health", profile.url), { headers });
       const data = await r.text();
       log("info", "test", "Proxy test", { status: r.status, bodyLen: data.length, body: data.substring(0, 200) });
       res.json({
@@ -520,12 +714,14 @@ async function startServer() {
 
   app.get("/api/test/session-small", authenticate, async (req, res) => {
     try {
-      const ocAuth = config.opencodePassword ? `${config.opencodeUsername}:${config.opencodePassword}` : null;
+      const profile = activeServer(config);
+      if (!profile) return res.status(400).json({ error: "No active server" });
+      const ocAuth = ocAuthPair(profile);
       const headers = { Accept: "application/json", "Accept-Encoding": "identity" };
       if (ocAuth) {
         headers["Authorization"] = "Basic " + Buffer.from(ocAuth).toString("base64");
       }
-      const r = await fetch(new URL("/session?limit=1", config.opencodeBaseUrl), { headers });
+      const r = await fetch(new URL("/session?limit=1", profile.url), { headers });
       const data = await r.text();
       log("info", "test", "Session small test", {
         status: r.status,
@@ -559,13 +755,18 @@ async function startServer() {
     res.write(`event: connected\ndata: ${JSON.stringify({ clientId })}\n\n`);
 
     const controller = new AbortController();
-    const ocAuthHeaders = config.opencodePassword
-      ? { Accept: "text/event-stream", "Accept-Encoding": "identity", Authorization: "Basic " + Buffer.from(`${config.opencodeUsername}:${config.opencodePassword}`).toString("base64") }
+    const profile = activeServer(config);
+    const ocAuthHeaders = profile && profile.password
+      ? { Accept: "text/event-stream", "Accept-Encoding": "identity", Authorization: "Basic " + Buffer.from(`${profile.username}:${profile.password}`).toString("base64") }
       : { Accept: "text/event-stream", "Accept-Encoding": "identity" };
 
     (async () => {
       try {
-        const eventUrl = new URL("/global/event", config.opencodeBaseUrl);
+        if (!profile) {
+          res.write(`event: error\ndata: ${JSON.stringify({ message: "No active OpenCode server configured" })}\n\n`);
+          return;
+        }
+        const eventUrl = new URL("/global/event", profile.url);
         const response = await fetch(eventUrl.toString(), {
           headers: ocAuthHeaders,
           signal: controller.signal,
@@ -635,7 +836,14 @@ async function startServer() {
     console.log("");
     console.log("  API Key:        " + config.apiKey);
     console.log("");
-    console.log("  OpenCode URL:   " + config.opencodeBaseUrl);
+    const cur = activeServer(config);
+    if (cur) {
+      console.log("  Active Server:  " + cur.name + " (" + cur.id + ")");
+      console.log("  OpenCode URL:   " + cur.url);
+      console.log("  Servers:        " + config.servers.length + " configured");
+    } else {
+      console.log("  No servers configured. Add one via the mobile app.");
+    }
     console.log("  Bridge Status:  " + (state.bridgeEnabled ? "ON" : "OFF"));
     console.log("");
     console.log("=".repeat(60));

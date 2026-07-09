@@ -36,6 +36,7 @@ export default function DashboardScreen({ navigation }: Props) {
     fetchMessages,
     disconnect,
     connected,
+    activeServerName,
   } = useAppStore();
 
   useFocusEffect(
@@ -97,7 +98,12 @@ export default function DashboardScreen({ navigation }: Props) {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.statusDot} />
-          <Text style={styles.headerTitle}>Folders</Text>
+          <View>
+            <Text style={styles.headerTitle}>Folders</Text>
+            {activeServerName ? (
+              <Text style={styles.serverName} numberOfLines={1}>{activeServerName}</Text>
+            ) : null}
+          </View>
         </View>
         <View style={styles.headerRight}>
           {pendingCount > 0 && (
@@ -105,6 +111,12 @@ export default function DashboardScreen({ navigation }: Props) {
               <Text style={styles.badgeText}>{pendingCount}</Text>
             </View>
           )}
+          <TouchableOpacity
+            style={styles.serversBtn}
+            onPress={() => navigation.navigate("Servers")}
+          >
+            <Text style={styles.serversText}>Servers</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.newBtn, creating && styles.newBtnDisabled]}
             onPress={handleNewSession}
@@ -224,6 +236,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.dark.accent,
     marginRight: Spacing.sm,
+  },
+  serversBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.dark.primary,
+    marginRight: Spacing.sm,
+  },
+  serversText: {
+    color: Colors.dark.primary,
+    fontSize: FontSizes.sm,
+    fontWeight: "500",
+  },
+  serverName: {
+    fontSize: FontSizes.xs,
+    color: Colors.dark.textMuted,
+    maxWidth: 140,
   },
   newBtn: {
     backgroundColor: Colors.dark.primary,

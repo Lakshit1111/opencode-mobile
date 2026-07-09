@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project, Agent, ConfigProviders, FileDiff } from "../types/opencode";
+import type { ConnectionConfig, Session, Message, Part, PermissionRequest, QuestionRequest, Todo, Project, Agent, ConfigProviders, FileDiff, ServerProfile, ServerTestResult, ActivateServerResult } from "../types/opencode";
 import { logger } from "../utils/logger";
 
 const CONNECTION_KEY = "@opencode_connection";
@@ -361,6 +361,79 @@ class OpenCodeClient {
 
   getEventStreamUrl(): string {
     return `${this.baseUrl}/api/events?token=${encodeURIComponent(this.apiKey)}`;
+  }
+
+  async listServers(): Promise<{ servers: ServerProfile[]; activeServerId: string }> {
+    const url = `${this.baseUrl}/api/servers`;
+    const res = await fetch(url, { headers: this.headers() });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API Error ${res.status}: ${text}`);
+    }
+    return await res.json() as { servers: ServerProfile[]; activeServerId: string };
+  }
+
+  async addServer(profile: {
+    name?: string;
+    url: string;
+    username?: string;
+    password?: string;
+    autoDiscover?: boolean;
+  }): Promise<ServerProfile> {
+    const url = `${this.baseUrl}/api/servers`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(profile),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API Error ${res.status}: ${text}`);
+    }
+    return await res.json() as ServerProfile;
+  }
+
+  async updateServer(id: string, patch: Partial<ServerProfile>): Promise<ServerProfile> {
+    const url = `${this.baseUrl}/api/servers/${encodeURIComponent(id)}`;
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API Error ${res.status}: ${text}`);
+    }
+    return await res.json() as ServerProfile;
+  }
+
+  async deleteServer(id: string): Promise<void> {
+    const url = `${this.baseUrl}/api/servers/${encodeURIComponent(id)}`;
+    const res = await fetch(url, { method: "DELETE", headers: this.headers() });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API Error ${res.status}: ${text}`);
+    }
+  }
+
+  async testServer(id: string): Promise<ServerTestResult> {
+    const url = `${this.baseUrl}/api/servers/${encodeURIComponent(id)}/test`;
+    const res = await fetch(url, { method: "POST", headers: this.headers() });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API Error ${res.status}: ${text}`);
+    }
+    return await res.json() as ServerTestResult;
+  }
+
+  async activateServer(id: string): Promise<ActivateServerResult> {
+    const url = `${this.baseUrl}/api/servers/${encodeURIComponent(id)}/activate`;
+    const res = await fetch(url, { method: "POST", headers: this.headers() });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API Error ${res.status}: ${text}`);
+    }
+    return await res.json() as ActivateServerResult;
   }
 }
 

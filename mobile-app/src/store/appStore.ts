@@ -12,6 +12,8 @@ import type {
   Event,
   Agent,
   ConfigProviders,
+  ServerProfile,
+  ServerTestResult,
 } from "../types/opencode";
 import { client } from "../api/client";
 import { sseManager } from "../api/sse";
@@ -131,12 +133,22 @@ interface AppState {
   selectedModel: { providerID: string; modelID: string } | null;
   sessionErrors: Map<string, string>;
 
+  servers: ServerProfile[];
+  activeServerId: string | null;
+  activeServerName: string;
+
   setConnection: (config: ConnectionConfig) => Promise<void>;
   disconnect: () => Promise<void>;
   loadSavedConnection: () => Promise<ConnectionConfig | null>;
   fetchSessions: () => Promise<void>;
   fetchAgents: () => Promise<void>;
   fetchProviders: () => Promise<void>;
+  fetchServers: () => Promise<void>;
+  addServer: (profile: { name?: string; url: string; username?: string; password?: string; autoDiscover?: boolean }) => Promise<ServerProfile>;
+  updateServer: (id: string, patch: Partial<ServerProfile>) => Promise<void>;
+  deleteServer: (id: string) => Promise<void>;
+  testServer: (id: string) => Promise<ServerTestResult>;
+  activateServer: (id: string) => Promise<void>;
   setSelectedAgent: (agent: string) => void;
   setSelectedModel: (model: { providerID: string; modelID: string } | null) => void;
   clearSessionError: (sessionID: string) => void;
@@ -174,6 +186,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedAgent: "build",
   selectedModel: null,
   sessionErrors: new Map(),
+  servers: [],
+  activeServerId: null,
+  activeServerName: "",
 
   setConnection: async (config: ConnectionConfig) => {
     logger.info("store", "setConnection called", { url: config.bridgeUrl, keyLength: config.apiKey.length });
@@ -191,6 +206,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().fetchSessions();
     get().fetchAgents();
     get().fetchProviders();
+    get().fetchServers();
   },
 
   disconnect: async () => {
@@ -214,6 +230,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedAgent: "build",
       selectedModel: null,
       sessionErrors: new Map(),
+      servers: [],
+      activeServerId: null,
+      activeServerName: "",
     });
     logger.info("store", "Disconnected and state cleared");
   },
@@ -231,6 +250,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().fetchSessions();
         get().fetchAgents();
         get().fetchProviders();
+        get().fetchServers();
         return config;
       } else {
         logger.warn("store", "Saved connection is no longer valid", health);
@@ -325,6 +345,69 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSelectedModel: (model: { providerID: string; modelID: string } | null) => {
     logger.info("store", `Selected model`, model);
     set({ selectedModel: model });
+  },
+
+  fetchServers: async () => {
+    logger.info("store", "fetchServers called");
+    try {
+      const data = await client.listServers();
+      const active = data.servers.find((s) => s.id === data.activeServerId) || null;
+      set({
+        servers: data.servers,
+        activeServerId: data.activeServerId || null,
+        activeServerName: active?.name || "",
+      });
+      logger.info("store", `fetchServers: loaded ${data.servers.length} servers, active=${data.activeServerId}`);
+    } catch (e: any) {
+      logger.error("store", "fetchServers failed", { error: e.message });
+    }
+  },
+
+  addServer: async (profile) => {
+    logger.info("store", "addServer called", { url: profile.url, name: profile.name });
+    const created = await client.addServer(profile);
+    await get().fetchServers();
+    return created;
+  },
+
+  updateServer: async (id, patch) => {
+    logger.info("store", `updateServer ${id}`, patch);
+    await client.updateServer(id, patch);
+    await get().fetchServers();
+  },
+
+  deleteServer: async (id) => {
+    logger.info("store", `deleteServer ${id}`);
+    await client.deleteServer(id);
+    await get().fetchServers();
+  },
+
+  testServer: async (id) => {
+    logger.info("store", `testServer ${id}`);
+    const result = await client.testServer(id);
+    logger.info("store", `testServer ${id} result`, result);
+    return result;
+  },
+
+  activateServer: async (id) => {
+    logger.info("store", `activateServer ${id}`);
+    const result = await client.activateServer(id);
+    set({
+      activeServerId: result.activeServerId,
+      activeServerName: get().servers.find((s) => s.id === result.activeServerId)?.name || "",
+    });
+    // Re-establish event stream + refresh data against the new backend.
+    get().stopEventStream();
+    get().startEventStream();
+    set((state) => {
+      const lastFetchTime = new Map(state.lastFetchTime);
+      for (const key of state.lastFetchTime.keys()) lastFetchTime.set(key, 0);
+      return { lastFetchTime };
+    });
+    get().fetchSessions();
+    get().fetchAgents();
+    get().fetchProviders();
+    logger.info("store", `activateServer ${id} done`, { healthy: result.healthy, requiresAuth: result.requiresAuth });
   },
 
   clearSessionError: (sessionID: string) => {

@@ -9,6 +9,7 @@ import ConnectScreen from "./screens/ConnectScreen";
 import DashboardScreen from "./screens/DashboardScreen";
 import SessionScreen from "./screens/SessionScreen";
 import FolderSessionsScreen from "./screens/FolderSessionsScreen";
+import ServersScreen from "./screens/ServersScreen";
 import LogsScreen from "./screens/LogsScreen";
 
 export type RootStackParamList = {
@@ -16,6 +17,7 @@ export type RootStackParamList = {
   Dashboard: undefined;
   FolderSessions: { directory: string };
   Session: { sessionID: string };
+  Servers: undefined;
   Logs: undefined;
 };
 
@@ -76,6 +78,11 @@ export default function App() {
                 name="Session"
                 component={SessionScreen}
                 options={{ title: "Session", headerBackTitle: "Back" }}
+              />
+              <Stack.Screen
+                name="Servers"
+                component={ServersScreen}
+                options={{ title: "Servers", headerBackTitle: "Back" }}
               />
               <Stack.Screen
                 name="Logs"

@@ -253,3 +253,24 @@ export interface ConfigProviders {
   providers: ProviderInfo[];
   default: Record<string, string>;
 }
+
+export interface ServerProfile {
+  id: string;
+  name: string;
+  url: string;
+  username: string;
+  password: string;
+  autoDiscover: boolean;
+}
+
+export interface ServerTestResult {
+  healthy: boolean;
+  requiresAuth: boolean;
+  version?: string;
+  sessionCount?: number;
+  error?: string;
+}
+
+export interface ActivateServerResult extends ServerTestResult {
+  activeServerId: string;
+}

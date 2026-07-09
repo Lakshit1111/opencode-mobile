@@ -883,16 +883,15 @@ async function startServer() {
 
     // Advertise via mDNS/Bonjour so the mobile app can auto-discover the bridge.
     let bonjour = null;
-    let bonjourService = null;
     try {
       const Bonjour = require("bonjour-service");
       bonjour = new Bonjour();
-      const os = require("os");
-      bonjourService = bonjour.publish({
-        name: "OpenCode Bridge (" + os.hostname() + ")",
+      const osName = require("os").hostname();
+      bonjour.publish({
+        name: "OpenCode Bridge (" + osName + ")",
         type: "opencode-bridge",
         port: config.bridgePort,
-        txt: { version: "1.0.0", host: os.hostname() },
+        txt: { version: "1.0.0", host: osName },
       });
       log("info", "mdns", "Advertising via mDNS as 'opencode-bridge' on port " + config.bridgePort);
       console.log("  mDNS:           Advertising as opencode-bridge on port " + config.bridgePort);
@@ -909,6 +908,20 @@ async function startServer() {
       try { if (bonjour) bonjour.unpublishAll(() => {}); } catch (e) {}
       server.close(() => process.exit(0));
     });
+  });
+
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      log("error", "bridge", `Port ${config.bridgePort} already in use, retrying in 2s...`);
+      console.error(`Port ${config.bridgePort} already in use, retrying in 2s...`);
+      setTimeout(() => {
+        server.close();
+        server.listen(config.bridgePort, "0.0.0.0");
+      }, 2000);
+    } else {
+      log("error", "bridge", "Server error", { error: err.message });
+      throw err;
+    }
   });
 }
 

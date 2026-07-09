@@ -438,6 +438,16 @@ async function startServer() {
       ? authHeader.slice(7)
       : req.query?.token;
 
+    // Allow loopback (local control panel) without a token. The control panel
+    // is served from this same process and runs in a browser on the host; it
+    // cannot meaningfully be secured by a key the user would have to re-enter
+    // on every page load. Remote/mobile callers still require the API key.
+    const loopbackIPs = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+    if (loopbackIPs.has(req.ip || "")) {
+      log("debug", "auth", `Accepted (loopback) ${req.method} ${req.path}`, { ip: req.ip });
+      return next();
+    }
+
     if (!token || token !== config.apiKey) {
       log("warn", "auth", `Rejected ${req.method} ${req.path}`, { ip: req.ip, hasToken: !!token });
       return res.status(401).json({ error: "Unauthorized. Provide a valid API key via Authorization: Bearer <token>" });
@@ -665,6 +675,29 @@ async function startServer() {
   });
   // --- end server profile management ---
 
+  // --- API key management ---
+  app.post("/api/apikey/regenerate", authenticate, (req, res) => {
+    const newKey = "oc-mobile-" + crypto.randomBytes(16).toString("hex");
+    config.apiKey = newKey;
+    saveConfig(config);
+    global.__BRIDGE_CFG__ = config;
+    log("warn", "apikey", "API key regenerated");
+    res.json({ apiKey: newKey });
+  });
+
+  app.put("/api/apikey", authenticate, (req, res) => {
+    const newKey = req.body?.apiKey;
+    if (!newKey || typeof newKey !== "string" || newKey.trim().length < 8) {
+      return res.status(400).json({ error: "API key must be a non-empty string of at least 8 characters" });
+    }
+    config.apiKey = newKey.trim();
+    saveConfig(config);
+    global.__BRIDGE_CFG__ = config;
+    log("warn", "apikey", "API key changed manually");
+    res.json({ apiKey: config.apiKey });
+  });
+  // --- end API key management ---
+
   app.all("/api/opencode/*", authenticate, checkIP, checkBridgeEnabled, async (req, res) => {
     const targetPath = "/" + req.params[0];
     const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
@@ -847,11 +880,35 @@ async function startServer() {
     console.log("  Bridge Status:  " + (state.bridgeEnabled ? "ON" : "OFF"));
     console.log("");
     console.log("=".repeat(60));
-  });
 
-  process.on("SIGINT", () => {
-    console.log("\nShutting down bridge...");
-    server.close(() => process.exit(0));
+    // Advertise via mDNS/Bonjour so the mobile app can auto-discover the bridge.
+    let bonjour = null;
+    let bonjourService = null;
+    try {
+      const Bonjour = require("bonjour-service");
+      bonjour = new Bonjour();
+      const os = require("os");
+      bonjourService = bonjour.publish({
+        name: "OpenCode Bridge (" + os.hostname() + ")",
+        type: "opencode-bridge",
+        port: config.bridgePort,
+        txt: { version: "1.0.0", host: os.hostname() },
+      });
+      log("info", "mdns", "Advertising via mDNS as 'opencode-bridge' on port " + config.bridgePort);
+      console.log("  mDNS:           Advertising as opencode-bridge on port " + config.bridgePort);
+      console.log("");
+      console.log("=".repeat(60));
+    } catch (e) {
+      log("warn", "mdns", "mDNS advertising failed (bonjour-service not available?)", { error: e.message });
+      console.log("");
+      console.log("=".repeat(60));
+    }
+
+    process.on("SIGINT", () => {
+      console.log("\nShutting down bridge...");
+      try { if (bonjour) bonjour.unpublishAll(() => {}); } catch (e) {}
+      server.close(() => process.exit(0));
+    });
   });
 }
 

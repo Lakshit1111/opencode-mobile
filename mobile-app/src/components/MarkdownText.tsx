@@ -8,6 +8,7 @@ const theme = {
     color: Colors.dark.text,
     fontSize: FontSizes.md,
     lineHeight: FontSizes.md * 1.5,
+    flexShrink: 1,
   },
   heading1: {
     color: Colors.dark.text,
@@ -48,6 +49,7 @@ const theme = {
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     fontSize: FontSizes.sm,
     lineHeight: FontSizes.sm * 1.5,
+    flexShrink: 1,
   },
   code_block: {
     color: Colors.dark.text,
@@ -57,6 +59,7 @@ const theme = {
     marginVertical: Spacing.sm,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     fontSize: FontSizes.sm,
+    flexShrink: 1,
   },
   bullet_list: {
     marginVertical: Spacing.xs,

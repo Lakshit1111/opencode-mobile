@@ -288,6 +288,7 @@ const styles = StyleSheet.create({
     color: "#ffcccc",
     fontSize: FontSizes.xs,
     fontFamily: "monospace",
+    flexShrink: 1,
   },
   errorDismiss: {
     marginLeft: Spacing.sm,

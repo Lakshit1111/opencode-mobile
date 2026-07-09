@@ -154,6 +154,20 @@
       float: right;
     }
     .refresh-btn:hover { border-color: #4caf50; color: #4caf50; }
+    .settings-btn {
+      background: #1a1a1a;
+      border: 1px solid #444;
+      color: #ccc;
+      padding: 10px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .settings-btn:hover { border-color: #4caf50; color: #4caf50; }
+    .settings-btn-warn { border-color: #e65100; color: #ffab40; }
+    .settings-btn-warn:hover { background: #e65100; color: #fff; border-color: #e65100; }
   </style>
 </head>
 <body>
@@ -202,6 +216,27 @@
     </div>
 
     <div class="card">
+      <div class="card-title">Settings</div>
+      <div style="color:#888;font-size:0.8rem;margin-bottom:16px;">Change the API key used by mobile devices to authenticate</div>
+
+      <div style="margin-bottom:16px;">
+        <label style="color:#999;font-size:0.8rem;display:block;margin-bottom:6px;">Set Custom API Key</label>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="customKeyInput" placeholder="Enter new API key (min 8 chars)" style="flex:1;background:#111;border:1px solid #444;border-radius:6px;padding:10px 12px;color:#e0e0e0;font-family:'SF Mono',Consolas,monospace;font-size:0.85rem;outline:none;" />
+          <button class="settings-btn" onclick="changeApiKey()">Save</button>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid #222;padding-top:16px;">
+        <label style="color:#999;font-size:0.8rem;display:block;margin-bottom:6px;">Generate New Random Key</label>
+        <div style="color:#666;font-size:0.75rem;margin-bottom:8px;">This will invalidate the current key and disconnect all mobile devices.</div>
+        <button class="settings-btn settings-btn-warn" onclick="regenerateApiKey()">Regenerate API Key</button>
+      </div>
+
+      <div id="keyChangeStatus" style="margin-top:12px;font-size:0.8rem;display:none;"></div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Connected Devices</div>
       <ul class="client-list" id="clientList">
         <li class="empty-state">No devices connected</li>
@@ -211,16 +246,20 @@
 
   <script>
     let apiKey = '';
+    let authFailed = false;
+    let pollingTimer = null;
 
     async function loadStatus() {
+      if (authFailed) return;
       try {
         const res = await fetch('/api/bridge/status', {
           headers: { 'Authorization': 'Bearer ' + apiKey }
         });
         if (res.status === 401) {
-          apiKey = prompt('Enter your API key:');
-          if (apiKey) localStorage.setItem('bridgeApiKey', apiKey);
-          return loadStatus();
+          authFailed = true;
+          stopPolling();
+          showKeyPrompt();
+          return;
         }
         const data = await res.json();
         updateUI(data);
@@ -228,6 +267,33 @@
         document.getElementById('statusText').textContent = 'Connection Error';
         document.getElementById('statusDot').className = 'status-indicator status-off';
       }
+    }
+
+    function showKeyPrompt() {
+      document.getElementById('statusText').textContent = 'Authentication Required';
+      document.getElementById('statusDot').className = 'status-indicator status-off';
+      document.getElementById('statusSubtext').textContent = 'Enter your API key to view bridge status';
+      document.getElementById('bridgeToggle').disabled = true;
+      document.getElementById('apiKey').innerHTML = '<span style="color:#f44336;cursor:pointer" onclick="promptForKey()">Click to enter API key</span>';
+    }
+
+    function promptForKey() {
+      const entered = prompt('Enter your API key:');
+      if (!entered || !entered.trim()) return;
+      apiKey = entered.trim();
+      localStorage.setItem('bridgeApiKey', apiKey);
+      authFailed = false;
+      startPolling();
+      loadStatus();
+    }
+
+    function startPolling() {
+      stopPolling();
+      pollingTimer = setInterval(loadStatus, 5000);
+    }
+
+    function stopPolling() {
+      if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; }
     }
 
     function updateUI(data) {
@@ -287,9 +353,59 @@
       }, 2000);
     }
 
+    function showKeyStatus(msg, isError) {
+      const el = document.getElementById('keyChangeStatus');
+      el.style.display = 'block';
+      el.style.color = isError ? '#f44336' : '#4caf50';
+      el.textContent = msg;
+      setTimeout(() => { el.style.display = 'none'; }, 4000);
+    }
+
+    async function changeApiKey() {
+      const input = document.getElementById('customKeyInput');
+      const newKey = input.value.trim();
+      if (!newKey) { showKeyStatus('Please enter a new API key', true); return; }
+      if (newKey.length < 8) { showKeyStatus('API key must be at least 8 characters', true); return; }
+      if (!confirm('Changing the API key will disconnect all mobile devices currently using the old key. Continue?')) return;
+      try {
+        const res = await fetch('/api/apikey', {
+          method: 'PUT',
+          headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: newKey })
+        });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'HTTP ' + res.status); }
+        const data = await res.json();
+        apiKey = data.apiKey;
+        localStorage.setItem('bridgeApiKey', apiKey);
+        input.value = '';
+        showKeyStatus('API key updated successfully', false);
+        loadStatus();
+      } catch (e) {
+        showKeyStatus('Failed: ' + e.message, true);
+      }
+    }
+
+    async function regenerateApiKey() {
+      if (!confirm('This will generate a new random API key and disconnect all mobile devices using the current key. Continue?')) return;
+      try {
+        const res = await fetch('/api/apikey/regenerate', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'HTTP ' + res.status); }
+        const data = await res.json();
+        apiKey = data.apiKey;
+        localStorage.setItem('bridgeApiKey', apiKey);
+        showKeyStatus('New API key generated: ' + data.apiKey, false);
+        loadStatus();
+      } catch (e) {
+        showKeyStatus('Failed: ' + e.message, true);
+      }
+    }
+
     apiKey = localStorage.getItem('bridgeApiKey') || '';
     loadStatus();
-    setInterval(loadStatus, 5000);
+    startPolling();
   </script>
 </body>
 </html>

@@ -94,6 +94,7 @@ const styles = StyleSheet.create({
     padding: Spacing.sm,
     marginVertical: Spacing.xs,
     borderRadius: BorderRadii.sm,
+    flexShrink: 1,
   },
   header: {
     flexDirection: "row",
@@ -145,10 +146,12 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     color: Colors.dark.textSecondary,
     fontFamily: "monospace",
+    flexShrink: 1,
   },
   detailError: {
     fontSize: FontSizes.sm,
     color: Colors.dark.error,
     fontFamily: "monospace",
+    flexShrink: 1,
   },
 });

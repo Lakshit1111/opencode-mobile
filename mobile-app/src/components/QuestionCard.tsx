@@ -106,6 +106,7 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadii.md,
     padding: Spacing.md,
     marginBottom: Spacing.sm,
+    flexShrink: 1,
   },
   question: {
     marginBottom: Spacing.md,
@@ -121,6 +122,8 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md,
     color: Colors.dark.text,
     marginBottom: Spacing.sm,
+    flexShrink: 1,
+    flexWrap: "wrap",
   },
   option: {
     backgroundColor: Colors.dark.surface,
@@ -146,6 +149,8 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     color: Colors.dark.textSecondary,
     marginTop: 2,
+    flexShrink: 1,
+    flexWrap: "wrap",
   },
   customInput: {
     backgroundColor: Colors.dark.surface,

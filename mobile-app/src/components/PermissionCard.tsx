@@ -69,6 +69,7 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadii.md,
     padding: Spacing.md,
     marginBottom: Spacing.sm,
+    flexShrink: 1,
   },
   header: {
     flexDirection: "row",
@@ -96,11 +97,15 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md,
     color: Colors.dark.text,
     marginBottom: Spacing.xs,
+    flexShrink: 1,
+    flexWrap: "wrap",
   },
   patterns: {
     fontSize: FontSizes.sm,
     color: Colors.dark.textSecondary,
     marginBottom: Spacing.md,
+    flexShrink: 1,
+    flexWrap: "wrap",
   },
   buttons: {
     flexDirection: "row",

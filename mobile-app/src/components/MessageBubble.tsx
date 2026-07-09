@@ -89,6 +89,7 @@ const styles = StyleSheet.create({
   container: {
     marginVertical: Spacing.xs,
     maxWidth: "92%",
+    flexShrink: 1,
   },
   userContainer: {
     alignSelf: "flex-end",
@@ -109,6 +110,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderRadius: BorderRadii.lg,
+    flexShrink: 1,
   },
   userBubble: {
     backgroundColor: "#1b3a1b",
@@ -133,6 +135,7 @@ const styles = StyleSheet.create({
     padding: Spacing.sm,
     marginVertical: Spacing.xs,
     borderRadius: BorderRadii.sm,
+    flexShrink: 1,
   },
   subtaskLabel: {
     fontSize: FontSizes.xs,
@@ -143,5 +146,7 @@ const styles = StyleSheet.create({
   subtaskDesc: {
     fontSize: FontSizes.sm,
     color: Colors.dark.text,
+    flexShrink: 1,
+    flexWrap: "wrap",
   },
 });

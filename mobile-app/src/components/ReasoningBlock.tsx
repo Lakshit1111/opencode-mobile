@@ -37,6 +37,7 @@ const styles = StyleSheet.create({
     padding: Spacing.sm,
     marginVertical: Spacing.xs,
     borderRadius: BorderRadii.sm,
+    flexShrink: 1,
   },
   header: {
     flexDirection: "row",
@@ -58,5 +59,6 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     color: "#ce93d8",
     lineHeight: FontSizes.sm * 1.5,
+    flexShrink: 1,
   },
 });

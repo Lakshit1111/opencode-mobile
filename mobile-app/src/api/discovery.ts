@@ -1,4 +1,3 @@
-import { Platform } from "react-native";
 import { logger } from "../utils/logger";
 
 export interface DiscoveredBridge {
@@ -47,12 +46,7 @@ export function startBridgeDiscovery(
   };
 
   zeroconf.on("start", () => {
-    logger.info("discovery", "mDNS scan started, searching for _opencode-bridge._tcp.");
-    try {
-      zeroconf.scan("_opencode-bridge", "tcp", "local.");
-    } catch (e: any) {
-      logger.warn("discovery", "mDNS scan call failed", { error: e.message });
-    }
+    logger.info("discovery", "mDNS scan started");
   });
 
   zeroconf.on("resolved", (service: any) => {
@@ -80,10 +74,12 @@ export function startBridgeDiscovery(
   }, timeoutMs);
 
   try {
-    zeroconf.start();
+    zeroconf.scan("_opencode-bridge", "tcp", "local.");
+    logger.info("discovery", "mDNS scan initiated for _opencode-bridge._tcp");
   } catch (e: any) {
-    logger.warn("discovery", "mDNS start failed", { error: e.message });
+    logger.warn("discovery", "mDNS scan failed", { error: e.message });
     if (timeoutHandle) clearTimeout(timeoutHandle);
+    stop();
     if (onTimeout) onTimeout();
   }
 

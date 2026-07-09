@@ -29,15 +29,19 @@ export default function ConnectScreen({ navigation }: Props) {
   const [manualMode, setManualMode] = useState(false);
   const { setConnection } = useAppStore();
   const discoveryRef = useRef<DiscoveryHandle | null>(null);
+  const foundRef = useRef(false);
 
   useEffect(() => {
     logger.info("screen", "ConnectScreen mounted, starting mDNS discovery");
     setBridgeUrl("http://192.168.");
     setDiscovering(true);
+    foundRef.current = false;
 
     discoveryRef.current = startBridgeDiscovery(
       (bridge) => {
         if (discoveryRef.current === null) return;
+        if (foundRef.current) return;
+        foundRef.current = true;
         logger.info("screen", "Bridge auto-discovered", bridge);
         setDiscoveredBridge(bridge);
         setBridgeUrl(`http://${bridge.host}:${bridge.port}`);
@@ -47,7 +51,7 @@ export default function ConnectScreen({ navigation }: Props) {
       () => {
         logger.info("screen", "mDNS discovery timed out, switching to manual mode");
         setDiscovering(false);
-        if (!discoveredBridge) setManualMode(true);
+        if (!foundRef.current) setManualMode(true);
       },
       5000
     );
@@ -106,19 +110,22 @@ export default function ConnectScreen({ navigation }: Props) {
     setDiscovering(true);
     setDiscoveredBridge(null);
     setBridgeUrl("http://192.168.");
+    foundRef.current = false;
     if (discoveryRef.current) {
       discoveryRef.current.stop();
     }
     discoveryRef.current = startBridgeDiscovery(
       (bridge) => {
         if (discoveryRef.current === null) return;
+        if (foundRef.current) return;
+        foundRef.current = true;
         setDiscoveredBridge(bridge);
         setBridgeUrl(`http://${bridge.host}:${bridge.port}`);
         setDiscovering(false);
       },
       () => {
         setDiscovering(false);
-        setManualMode(true);
+        if (!foundRef.current) setManualMode(true);
       },
       5000
     );

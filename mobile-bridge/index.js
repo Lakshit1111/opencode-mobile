@@ -881,31 +881,8 @@ async function startServer() {
     console.log("");
     console.log("=".repeat(60));
 
-    // Advertise via mDNS/Bonjour so the mobile app can auto-discover the bridge.
-    let bonjour = null;
-    try {
-      const Bonjour = require("bonjour-service");
-      bonjour = new Bonjour();
-      const osName = require("os").hostname();
-      bonjour.publish({
-        name: osName,
-        type: "opencode-bridge",
-        port: config.bridgePort,
-        txt: { version: "1.0.0", host: osName },
-      });
-      log("info", "mdns", "Advertising via mDNS as 'opencode-bridge' on port " + config.bridgePort);
-      console.log("  mDNS:           Advertising as opencode-bridge on port " + config.bridgePort);
-      console.log("");
-      console.log("=".repeat(60));
-    } catch (e) {
-      log("warn", "mdns", "mDNS advertising failed (bonjour-service not available?)", { error: e.message });
-      console.log("");
-      console.log("=".repeat(60));
-    }
-
     process.on("SIGINT", () => {
       console.log("\nShutting down bridge...");
-      try { if (bonjour) bonjour.unpublishAll(() => {}); } catch (e) {}
       server.close(() => process.exit(0));
     });
   });

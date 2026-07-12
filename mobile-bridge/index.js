@@ -366,6 +366,23 @@ function ocAuthPair(profile) {
 async function startServer() {
   let config = loadConfig();
   config = ensureApiKey(config);
+
+  // Auto-heal: if the active server profile has an empty password but
+  // OPENCODE_SERVER_PASSWORD is set in the environment (e.g. via NSSM
+  // AppEnvironmentExtra), populate it from the env so the bridge can auth
+  // to OpenCode without manual config editing.
+  const envPass = process.env.OPENCODE_SERVER_PASSWORD;
+  const envUser = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+  if (envPass) {
+    const profile = activeServer(config);
+    if (profile && !profile.password) {
+      profile.password = envPass;
+      profile.username = envUser;
+      saveConfig(config);
+      log("info", "bridge", "Populated server password from OPENCODE_SERVER_PASSWORD env var", { server: profile.id });
+    }
+  }
+
   if (config.servers.length === 0) {
     // No servers at all: seed an empty profile so the app can configure it.
     const seeded = normalizeProfile({ id: "srv-default", name: "Default server", url: "http://127.0.0.1:8765", autoDiscover: false });

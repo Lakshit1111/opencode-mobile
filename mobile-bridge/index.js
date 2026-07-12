@@ -438,13 +438,29 @@ async function startServer() {
       ? authHeader.slice(7)
       : req.query?.token;
 
-    // Allow loopback (local control panel) without a token. The control panel
-    // is served from this same process and runs in a browser on the host; it
-    // cannot meaningfully be secured by a key the user would have to re-enter
-    // on every page load. Remote/mobile callers still require the API key.
+    // Allow loopback (local control panel) without a token. Also allow
+    // requests from the host machine's own LAN IPs — the control panel
+    // may be accessed via http://<lan-ip>:3456 from the same computer.
     const loopbackIPs = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-    if (loopbackIPs.has(req.ip || "")) {
+    const clientIP = (req.ip || "").replace(/^::ffff:/, "");
+    if (loopbackIPs.has(req.ip || "") || loopbackIPs.has(clientIP)) {
       log("debug", "auth", `Accepted (loopback) ${req.method} ${req.path}`, { ip: req.ip });
+      return next();
+    }
+
+    // Also allow requests from the host machine's own network IPs.
+    const os = require("os");
+    const ifaces = os.networkInterfaces();
+    const hostIPs = new Set();
+    Object.keys(ifaces).forEach((ifname) => {
+      ifaces[ifname].forEach((iface) => {
+        if (iface.family === "IPv4" && !iface.internal) {
+          hostIPs.add(iface.address);
+        }
+      });
+    });
+    if (hostIPs.has(clientIP)) {
+      log("debug", "auth", `Accepted (host LAN) ${req.method} ${req.path}`, { ip: req.ip });
       return next();
     }
 

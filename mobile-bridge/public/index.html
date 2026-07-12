@@ -283,6 +283,7 @@
       apiKey = entered.trim();
       localStorage.setItem('bridgeApiKey', apiKey);
       authFailed = false;
+      document.getElementById('bridgeToggle').disabled = false;
       startPolling();
       loadStatus();
     }
@@ -336,8 +337,14 @@
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' }
         });
+        if (res.status === 401) {
+          authFailed = true;
+          stopPolling();
+          showKeyPrompt();
+          return;
+        }
         const data = await res.json();
-        loadStatus();
+        updateUI(data);
       } catch (e) {
         console.error(e);
       }

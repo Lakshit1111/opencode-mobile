@@ -15,11 +15,12 @@ export interface DiscoveryHandle {
 export function startBridgeDiscovery(
   onFound: DiscoveryCallback,
   onTimeout?: () => void,
-  timeoutMs: number = 5000
+  timeoutMs: number = 15000
 ): DiscoveryHandle {
   let stopped = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let zeroconf: any = null;
+  const foundNames = new Set<string>();
 
   try {
     const Zeroconf = require("react-native-zeroconf").default;
@@ -49,6 +50,13 @@ export function startBridgeDiscovery(
     logger.info("discovery", "mDNS scan started");
   });
 
+  zeroconf.on("found", (service: any) => {
+    if (stopped) return;
+    if (!service || !service.name) return;
+    foundNames.add(service.name);
+    logger.info("discovery", "mDNS service found (not yet resolved)", { name: service.name });
+  });
+
   zeroconf.on("resolved", (service: any) => {
     if (stopped) return;
     if (!service || !service.host) return;
@@ -67,7 +75,14 @@ export function startBridgeDiscovery(
 
   timeoutHandle = setTimeout(() => {
     if (!stopped) {
-      logger.info("discovery", "mDNS discovery timed out after " + timeoutMs + "ms");
+      logger.info("discovery", "mDNS discovery timed out after " + timeoutMs + "ms", {
+        foundButUnresolved: Array.from(foundNames),
+      });
+      if (foundNames.size > 0) {
+        logger.warn("discovery", "Bridge(s) detected but could not resolve host — enter URL manually", {
+          names: Array.from(foundNames),
+        });
+      }
       stop();
       if (onTimeout) onTimeout();
     }

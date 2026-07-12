@@ -53,7 +53,7 @@ export default function ConnectScreen({ navigation }: Props) {
         setDiscovering(false);
         if (!foundRef.current) setManualMode(true);
       },
-      5000
+      15000
     );
 
     return () => {
@@ -127,7 +127,7 @@ export default function ConnectScreen({ navigation }: Props) {
         setDiscovering(false);
         if (!foundRef.current) setManualMode(true);
       },
-      5000
+      15000
     );
   };
 

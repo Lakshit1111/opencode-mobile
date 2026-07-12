@@ -888,7 +888,7 @@ async function startServer() {
       bonjour = new Bonjour();
       const osName = require("os").hostname();
       bonjour.publish({
-        name: "OpenCode Bridge (" + osName + ")",
+        name: osName,
         type: "opencode-bridge",
         port: config.bridgePort,
         txt: { version: "1.0.0", host: osName },
